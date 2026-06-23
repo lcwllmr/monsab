@@ -1,0 +1,36 @@
+[project]
+name = "monsab"
+readme = "README.md"
+description = ""
+authors = [
+    { name = "Luca Wellmeier", email = "luca.wellmeier@uit.no" }
+]
+dynamic = ["version"]
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.5.0",
+    "scipy>=1.18.0",
+]
+
+[project.urls]
+Repository = "https://github.com/lcwllmr/monsab.git"
+Documentation = "https://lcwllmr.github.io/monsab"
+Issues = "https://github.com/lcwllmr/monsab/issues"
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.11.0",
+    "pdoc3>=0.11.6",
+    "pre-commit>=4.6.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.18",
+    "scipy-stubs>=1.18.0.0",
+]
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
