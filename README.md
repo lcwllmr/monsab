@@ -1,5 +1,8 @@
 # `monsab`: Fast symmetry-adapted basis transform for monomial groups
 
+[![ci](https://github.com/lcwllmr/monsab/actions/workflows/ci.yml/badge.svg)](https://github.com/lcwllmr/monsab/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/lcwllmr/monsab/graph/badge.svg?token=RI56K0HE76)](https://codecov.io/gh/lcwllmr/monsab)
+
 > [!TIP]
 > Preprint coming soon! Will be linked here, so check back later!
 
