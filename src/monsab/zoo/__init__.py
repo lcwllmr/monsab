@@ -1,14 +1,23 @@
-from ._abelian import Cyclic, Abelian
-from ._metacyclic import MetaCyclic, Dihedral
-from ._product import DirectProduct
+"""
+Zoo of monomial groups.
+"""
+
+from ._abelian import abelian, cyclic
+from ._base import MonomialGroup, trivial
+from ._metacyclic import affine_group_1d, dihedral, metacyclic
+from ._product import direct_product
 
 __all__ = [
     # abelian
-    "Cyclic",
-    "Abelian"
-    # metacyclc
-    "Metacyclic",
-    "Dihedral"
+    "abelian",
+    "cyclic",
+    # base
+    "MonomialGroup",
+    "trivial",
+    # metacyclic
+    "affine_group_1d",
+    "dihedral",
+    "metacyclic",
     # product
-    "DirectProduct"
+    "direct_product",
 ]
