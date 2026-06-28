@@ -17,6 +17,7 @@ from monsab.core import (
 )
 from monsab.pop import (
     MonomialSpace,
+    SquarefreeMonomialSpace,
     build_monomial_sab,
 )
 from monsab.util import is_prime, primitive_root
@@ -61,6 +62,14 @@ def main() -> None:
         choices=["cyclic", "abelian", "dihedral", "affine"],
         help="Group type",
     )
+    parser.add_argument(
+        "-m",
+        "--monomials",
+        type=str,
+        default="standard",
+        choices=["standard", "squarefree"],
+        help="Monomial space type (default: standard)",
+    )
 
     parser.add_argument(
         "-t",
@@ -95,6 +104,7 @@ def main() -> None:
     n = args.variables
     d = args.degree
     group_type = args.group
+    space_type = args.monomials
     threads = args.threads
     batch_size = args.batch
     runs = args.runs
@@ -102,11 +112,16 @@ def main() -> None:
     # Sparsity factor s (average non-zeros per row)
     sparsity_factor = args.sparsity if args.sparsity is not None else 4.0
 
+    MonomialClass = (
+        MonomialSpace if space_type == "standard" else SquarefreeMonomialSpace
+    )
+
     print("=== Benchmark Configuration ===")
     print(f"Variables (n)    : {n}")
     print(f"Degree (d)       : {d}")
-    print(f"Full Dimension   : {MonomialSpace(n, d).total_monomials}")
+    print(f"Full Dimension   : {MonomialClass(n, d).total_monomials}")
     print(f"Group (g)        : {group_type}")
+    print(f"Space (m)        : {space_type}")
     print(f"Threads (t)      : {threads}")
     print(f"Batch Size (b)   : {batch_size}")
     print(f"Runs (r)         : {runs}")
@@ -160,8 +175,8 @@ def main() -> None:
     )
 
     # 3. Build Monomials
-    def build_monomials() -> tuple[MonomialSpace, list[tuple[tuple[int, ...], ...]]]:
-        space = MonomialSpace(n, d)
+    def build_monomials() -> tuple[Any, list[tuple[tuple[int, ...], ...]]]:
+        space = MonomialClass(n, d)
         orbit_data = space.get_full_orbits(concrete_generators, num_threads=threads)
         return space, orbit_data
 
@@ -172,7 +187,7 @@ def main() -> None:
 
     # 4. Initialize SAB Transform
     def init_sab() -> Any:
-        space_d = MonomialSpace(n, d)
+        space_d = MonomialClass(n, d)
         orbits_d = space_d.get_full_orbits(concrete_generators, num_threads=threads)
 
         abstract = BaumClausenPaths.from_baum_clausen(tuple(bc_stages))
@@ -186,7 +201,7 @@ def main() -> None:
 
     transform = timed_step("Initialize SAB transform", init_sab)
     final_blocks = transform.blocks
-    monomial_space_d = MonomialSpace(n, d)
+    monomial_space_d = MonomialClass(n, d)
 
     def generate_intertwiner_batch() -> list[Any]:
 
