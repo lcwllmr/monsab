@@ -5,6 +5,7 @@ dist/
 .pytest_cache/
 .coverage
 docs/
-*.pyd
 
+*.pyd
+*.pdb
 target/

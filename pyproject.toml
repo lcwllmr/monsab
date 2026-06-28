@@ -6,7 +6,6 @@ authors = [
     { name = "Luca Wellmeier", email = "luca.wellmeier@uit.no" }
 ]
 version = "0.0.0"
-dynamic = ["version"]
 requires-python = ">=3.14"
 dependencies = [
     "numpy>=2.5.0",
@@ -21,6 +20,7 @@ Issues = "https://github.com/lcwllmr/monsab/issues"
 [dependency-groups]
 dev = [
     "matplotlib>=3.11.0",
+    "maturin>=1.14.1",
     "pdoc3>=0.11.6",
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",
