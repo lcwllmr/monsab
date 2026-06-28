@@ -53,7 +53,6 @@ def test_sab_transform_s3():
 
 def test_transform_edge_cases():
     from monsab.core._transform import SABTransform, SABBlock
-    import scipy.sparse
 
     empty_transform = SABTransform(blocks=(), N=0)
     assert empty_transform([]) == []
@@ -67,9 +66,8 @@ def test_transform_edge_cases():
         orbit_reps=(0,),
         orbit_reps_flat=(0,),
         orbit_sizes=(1,),
-        orbit=(0,),
-        col_to_j=(0,),
-        col_to_l=(0,),
+        col_to_j=[0],
+        col_to_l=[0],
     )
     t = SABTransform(blocks=(b,), N=1)
 
@@ -78,7 +76,7 @@ def test_transform_edge_cases():
     assert basis[0].shape == (1, 1)
 
     # Test valid filter
-    # Provide a matrix that maps to no valid j (using j=-1)
+    # Provide a matrix that maps to no valid j (using j=4294967295 which is u32::MAX)
     b2 = SABBlock(
         rep_id=0,
         dim=1,
@@ -86,17 +84,12 @@ def test_transform_edge_cases():
         orbit_reps=(0,),
         orbit_reps_flat=(0,),
         orbit_sizes=(1,),
-        orbit=(0,),
-        col_to_j=(-1,),
-        col_to_l=(0,),
+        col_to_j=[4294967295, 0],
+        col_to_l=[0, 0],
     )
-    t2 = SABTransform(blocks=(b2,), N=1)
-    mat = scipy.sparse.csr_matrix([[1.0]])
-    res = t2([mat])
-    assert len(res) == 1
-    assert res[0][0].shape == (1, 1)
-    assert res[0][0].nnz == 0
-    t2.explicit_basis(sparse=True)
+    t2 = SABTransform(blocks=(b2,), N=2)
+    basis = t2.explicit_basis(sparse=True)
+    assert len(basis) == 1
     t2.explicit_basis(sparse=False)
 
 

@@ -71,3 +71,52 @@ def test_squarefree_monomial_space():
         nxt_i = space.apply_gen(i, inv_data)
         nxt_tup = tuple(sorted(inv_data[v] for v in tup))
         assert space.rank_tuple(nxt_tup) == nxt_i
+
+    from monsab.core._transform import SABTransform
+    from monsab.core import BaumClausenPaths
+    from monsab.pop._monomials import build_monomial_sab
+
+    # Provide a dummy abstract BaumClausenPaths
+    abstract = BaumClausenPaths({0: ()}, 2)
+    sab = build_monomial_sab(abstract, g, full_orbits[:1], space, num_threads=2)
+    assert isinstance(sab, SABTransform)
+
+    # Also test sequential for coverage
+    sab_seq = build_monomial_sab(abstract, g, full_orbits[:1], space, num_threads=1)
+    assert isinstance(sab_seq, SABTransform)
+
+
+def test_sparse_sab_block_structure():
+    """
+    Tests that SABBlock holds sparse mappings (valid_cols, j_values, l_values)
+    and that parallel Rust threads behave identically to sequential ones.
+    """
+    from monsab.pop import SquarefreeMonomialSpace
+    from monsab.core import Permutation
+    from monsab.core import BaumClausenPaths
+    from monsab.pop._monomials import build_monomial_sab
+    import numpy as np
+
+    space = SquarefreeMonomialSpace(4, 2)
+    g = {1: Permutation((1, 2, 3, 0))}
+    orbits = space.get_full_orbits(g, num_threads=1)
+    abstract = BaumClausenPaths({0: ()}, 4)
+
+    sab_seq = build_monomial_sab(abstract, g, orbits, space, num_threads=1)
+    sab_par = build_monomial_sab(abstract, g, orbits, space, num_threads=4)
+
+    # Verify structural equivalence between seq and par
+    assert len(sab_seq.blocks) == len(sab_par.blocks)
+
+    for b_seq, b_par in zip(sab_seq.blocks, sab_par.blocks):
+        assert b_seq.rep_id == b_par.rep_id
+        assert b_seq.dim == b_par.dim
+        np.testing.assert_array_equal(b_seq.col_to_j, b_par.col_to_j)
+        np.testing.assert_array_equal(b_seq.col_to_l, b_par.col_to_l)
+
+    # Check explicit basis to ensure sparse values are correct
+    basis_seq = sab_seq.explicit_basis(sparse=False)
+    basis_par = sab_par.explicit_basis(sparse=False)
+    assert len(basis_seq) == len(basis_par)
+    for m1, m2 in zip(basis_seq, basis_par):
+        np.testing.assert_allclose(m1, m2)
