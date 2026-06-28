@@ -10,6 +10,7 @@ import cmath
 import numpy as np
 import numpy.typing as npt
 import scipy.sparse
+from monsab import _backend
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,77 +18,92 @@ class SABBlock:
     rep_id: int
     dim: int
     e: int
-    orbit_reps: tuple[int, ...]
     orbit_reps_flat: tuple[int, ...]
     orbit_sizes: tuple[int, ...]
-    orbit: tuple[int, ...]
-    col_to_j: tuple[int, ...]
-    col_to_l: tuple[int, ...]
+    col_to_j: np.ndarray | tuple[int, ...] | list[int]
+    col_to_l: np.ndarray | tuple[int, ...] | list[int]
+    orbit_reps: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class SABTransform:
-    blocks: tuple[SABBlock, ...]
-    N: int
+    _rust_transform: _backend.RustSABTransform | None = None
+    _blocks: tuple[SABBlock, ...] | None = None
+    _N: int | None = None
 
-    def __call__(
-        self, matrices: typing.Sequence[scipy.sparse.csr_matrix]
-    ) -> list[list[scipy.sparse.csr_matrix]]:
-        if not self.blocks:
-            return []
+    def __init__(
+        self,
+        blocks: tuple[SABBlock, ...] | None = None,
+        N: int | None = None,
+        _rust_transform: _backend.RustSABTransform | None = None,
+    ):
+        object.__setattr__(self, "_rust_transform", _rust_transform)
+        object.__setattr__(self, "_blocks", blocks)
+        object.__setattr__(self, "_N", N)
+
+    @property
+    def blocks(self) -> tuple[SABBlock, ...]:
+        if self._blocks is not None:
+            return self._blocks
+
+        if self._rust_transform is None:
+            return ()
 
         result = []
-        for block in self.blocks:
-            m_k = block.dim
-            e = block.e
-            col_to_j = np.array(block.col_to_j, dtype=np.int32)
-            col_to_l = np.array(block.col_to_l, dtype=np.int32)
-            orbit_sizes = np.array(block.orbit_sizes, dtype=np.float64)
-            orbit_reps_flat = list(block.orbit_reps_flat)
+        for b in self._rust_transform.blocks:
+            result.append(
+                SABBlock(
+                    rep_id=b.rep_id,
+                    dim=b.dim,
+                    e=b.e,
+                    orbit_reps_flat=tuple(b.orbit_reps_flat),
+                    orbit_sizes=tuple(b.orbit_sizes),
+                    col_to_j=b.col_to_j,
+                    col_to_l=b.col_to_l,
+                )
+            )
+        return tuple(result)
 
-            phase_map = np.exp(-2j * np.pi * np.arange(e) / e)
+    @property
+    def N(self) -> int:
+        if self._N is not None:
+            return self._N
+        if self._rust_transform is not None:
+            return self._rust_transform.n_monomials
+        return 0
 
-            block_batch = []
-            for T in matrices:
-                T_reps = T[orbit_reps_flat, :]
-                T_reps_coo = T_reps.tocoo()
+    def __call__(
+        self, matrices: list[scipy.sparse.csr_matrix] | scipy.sparse.csr_matrix
+    ) -> list[list[scipy.sparse.csr_matrix]]:
+        if not isinstance(matrices, list):
+            matrices = [matrices]
 
-                rows = T_reps_coo.row
-                cols = T_reps_coo.col
-                data = T_reps_coo.data
+        if self._rust_transform is None:
+            return []
 
-                j = col_to_j[cols]
-                valid = j != -1
+        # Use Rust to extract blocks natively
+        results = self._rust_transform.extract_batch(
+            [m.data for m in matrices],
+            [m.indices for m in matrices],
+            [m.indptr for m in matrices],
+        )
 
-                if not np.any(valid):
-                    block_batch.append(
-                        scipy.sparse.coo_matrix((m_k, m_k), dtype=np.complex128).tocsr()
+        final_blocks = []
+        for block_res in results:
+            b_list = []
+            for data, rows, cols, m_k in block_res:
+                if len(data) == 0:
+                    b_list.append(
+                        scipy.sparse.csr_matrix((m_k, m_k), dtype=np.complex128)
                     )
-                    continue
+                else:
+                    mat = scipy.sparse.coo_matrix(
+                        (data, (rows, cols)), shape=(m_k, m_k)
+                    )
+                    b_list.append(mat.tocsr())
+            final_blocks.append(b_list)
 
-                rows_valid = rows[valid]
-                j_valid = j[valid]
-                cols_valid = cols[valid]
-                data_valid = data[valid]
-                l_valid = col_to_l[cols_valid]
-
-                phases = phase_map[l_valid]
-                norms = np.sqrt(orbit_sizes[rows_valid] / orbit_sizes[j_valid])
-                vals = data_valid * norms * phases
-
-                T_k = scipy.sparse.coo_matrix(
-                    (vals, (rows_valid, j_valid)),
-                    shape=(m_k, m_k),
-                    dtype=np.complex128,
-                ).tocsr()
-
-                # Symmetrize numerical noise if input was real symmetric
-                # Note: keeping it general, so we just append
-                block_batch.append(T_k)
-
-            result.append(block_batch)
-
-        return result
+        return final_blocks
 
     @typing.overload
     def explicit_basis(
@@ -101,7 +117,8 @@ class SABTransform:
 
     def explicit_basis(self, sparse: bool = True) -> typing.Any:
         matrices = []
-        if not self.blocks:
+        blocks = self.blocks
+        if not blocks:
             return []
 
         N = self.N
@@ -109,36 +126,28 @@ class SABTransform:
         for block in self.blocks:
             m_k = block.dim
             e = block.e
-            col_to_j = block.col_to_j
-            col_to_l = block.col_to_l
             orbit_sizes = block.orbit_sizes
 
+            col_to_j = np.asarray(block.col_to_j, dtype=np.uint32)
+            col_to_l = np.asarray(block.col_to_l, dtype=np.uint32)
+
+            valid_cols = np.where(col_to_j != 4294967295)[0]
+            j_values = col_to_j[valid_cols]
+            l_values = col_to_l[valid_cols]
+
             if sparse:
-                rows = []
-                cols = []
-                data = []
-
-                for v, j in enumerate(col_to_j):
-                    if j == -1:
-                        continue
-
-                    ell = col_to_l[v]
-                    val = cmath.exp(-2j * math.pi * ell / e) / math.sqrt(orbit_sizes[j])
-                    rows.append(v)
-                    cols.append(j)
-                    data.append(val)
-
-                U_k = scipy.sparse.csr_matrix(
-                    (data, (rows, cols)), shape=(N, m_k), dtype=np.complex128
+                vals = np.exp(-2j * np.pi * l_values / e) / np.sqrt(
+                    np.array(orbit_sizes)[j_values]
                 )
-                matrices.append(U_k)
+                U_k = scipy.sparse.coo_matrix(
+                    (vals, (valid_cols, j_values)),
+                    shape=(N, m_k),
+                    dtype=np.complex128,
+                )
+                matrices.append(U_k.tocsr())
             else:
                 U_k = np.zeros((N, m_k), dtype=np.complex128)
-                for v, j in enumerate(col_to_j):
-                    if j == -1:
-                        continue
-
-                    ell = col_to_l[v]
+                for v, j, ell in zip(valid_cols, j_values, l_values):
                     val = cmath.exp(-2j * math.pi * ell / e) / math.sqrt(orbit_sizes[j])
                     U_k[v, j] = val
                 matrices.append(U_k)

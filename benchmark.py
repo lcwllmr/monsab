@@ -187,15 +187,13 @@ def main() -> None:
 
     # 4. Initialize SAB Transform
     def init_sab() -> Any:
-        space_d = MonomialClass(n, d)
-        orbits_d = space_d.get_full_orbits(concrete_generators, num_threads=threads)
-
         abstract = BaumClausenPaths.from_baum_clausen(tuple(bc_stages))
+
         return build_monomial_sab(
             abstract,
             concrete_generators,
-            orbits_d,
-            space_d,
+            orbits,
+            monomial_space,
             num_threads=threads,
         )
 
