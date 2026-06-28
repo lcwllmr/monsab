@@ -5,6 +5,7 @@ description = ""
 authors = [
     { name = "Luca Wellmeier", email = "luca.wellmeier@uit.no" }
 ]
+version = "0.0.0"
 dynamic = ["version"]
 requires-python = ">=3.14"
 dependencies = [
@@ -29,8 +30,10 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling", "uv-dynamic-versioning"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
-[tool.hatch.version]
-source = "uv-dynamic-versioning"
+[tool.maturin]
+manifest-path = "backend/Cargo.toml"
+python-source = "src"
+module-name = "monsab._backend"
