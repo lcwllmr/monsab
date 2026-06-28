@@ -13,11 +13,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
       - run: uv sync --locked
+      - run: |
+          uv run cargo fmt --all -- --check
+          uv run cargo clippy --all-targets --all-features -- -D warnings
+          uv run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
       - run: |
           uv run ruff check .
           uv run ruff format --check .
-      - run: uv run pytest --cov=monsab --cov-report=xml
+          uv run pytest --cov=monsab --cov-report=xml
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info,coverage.xml

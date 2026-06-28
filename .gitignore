@@ -5,7 +5,7 @@ dist/
 .pytest_cache/
 .coverage
 docs/
-
 *.pyd
 *.pdb
 target/
+lcov.info
