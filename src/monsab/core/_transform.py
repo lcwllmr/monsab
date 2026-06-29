@@ -73,8 +73,20 @@ class SABTransform:
         return 0
 
     def __call__(
-        self, matrices: list[scipy.sparse.csr_matrix] | scipy.sparse.csr_matrix
+        self,
+        matrices: list[scipy.sparse.csr_matrix] | scipy.sparse.csr_matrix,
+        reynolds: bool = False,
     ) -> list[list[scipy.sparse.csr_matrix]]:
+        """
+        Fast SAB basis block extraction.
+
+        Args:
+            matrices: The input matrices to apply the SAB basis transform to.
+            reynolds: If True, uses the fast Coset Averaging algorithm (Method 1) to evaluate the
+                projection $T_k(R(X))$ directly without explicitly constructing $R(X)$. The input matrix
+                $X$ must be pre-averaged over the stabilizer subgroup $H_k$ for this to be exact.
+                Requires the transform to be initialized with `coset_reps`.
+        """
         if not isinstance(matrices, list):
             matrices = [matrices]
 
@@ -86,6 +98,7 @@ class SABTransform:
             [m.data for m in matrices],
             [m.indices for m in matrices],
             [m.indptr for m in matrices],
+            reynolds,
         )
 
         final_blocks = []

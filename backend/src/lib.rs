@@ -311,6 +311,10 @@ pub struct RustSABBlock {
     pub orbit_sizes: Vec<usize>,
     pub col_to_j: Vec<u32>,
     pub col_to_l: Vec<u32>,
+    #[pyo3(get)]
+    pub d_k: usize,
+    pub coset_action: Option<Vec<u32>>,
+    pub coset_action_inv: Option<Vec<u32>>,
 }
 
 #[derive(Clone)]
@@ -329,12 +333,14 @@ impl RustSABTransform {
     }
 
     #[allow(clippy::type_complexity)]
+    #[pyo3(signature = (batch_data, batch_indices, batch_indptr, reynolds=false))]
     fn extract_batch<'py>(
         &self,
         py: pyo3::Python<'py>,
         batch_data: Vec<numpy::PyReadonlyArray1<'py, f64>>,
         batch_indices: Vec<numpy::PyReadonlyArray1<'py, i32>>,
         batch_indptr: Vec<numpy::PyReadonlyArray1<'py, i32>>,
+        reynolds: bool,
     ) -> pyo3::PyResult<
         Vec<
             Vec<(
@@ -381,25 +387,59 @@ impl RustSABTransform {
                         let mut rows = Vec::new();
                         let mut cols = Vec::new();
 
-                        for (local_row, &m_id) in block.orbit_reps_flat.iter().enumerate() {
-                            let row_start = indptr[m_id] as usize;
-                            let row_end = indptr[m_id + 1] as usize;
+                        let m_iter = if reynolds && block.coset_action.is_some() {
+                            block.d_k
+                        } else {
+                            1
+                        };
+                        let norm_factor = if reynolds { 1.0 / (m_iter as f64) } else { 1.0 };
+                        let n_total = if let Some(a) = &block.coset_action {
+                            a.len() / block.d_k
+                        } else {
+                            0
+                        };
 
-                            for i in row_start..row_end {
-                                let c = indices[i] as usize;
-                                let j_val = block.col_to_j[c];
-                                if j_val != u32::MAX {
-                                    let l_val = block.col_to_l[c] as usize;
+                        for (local_row, &y) in block.orbit_reps_flat.iter().enumerate() {
+                            for m in 0..m_iter {
+                                let y_prime = if reynolds {
+                                    if let Some(a_inv) = &block.coset_action_inv {
+                                        a_inv[m * n_total + y] as usize
+                                    } else {
+                                        y
+                                    }
+                                } else {
+                                    y
+                                };
 
-                                    let val = data[i];
-                                    let phase = phase_map[l_val];
-                                    let norm = ((block.orbit_sizes[local_row] as f64)
-                                        / (block.orbit_sizes[j_val as usize] as f64))
-                                        .sqrt();
+                                let row_start = indptr[y_prime] as usize;
+                                let row_end = indptr[y_prime + 1] as usize;
 
-                                    vals.push(phase * val * norm);
-                                    rows.push(local_row as i32);
-                                    cols.push(j_val as i32);
+                                for i in row_start..row_end {
+                                    let c = indices[i] as usize;
+                                    let w = if reynolds {
+                                        if let Some(a) = &block.coset_action {
+                                            a[m * n_total + c] as usize
+                                        } else {
+                                            c
+                                        }
+                                    } else {
+                                        c
+                                    };
+
+                                    let j_val = block.col_to_j[w];
+                                    if j_val != u32::MAX {
+                                        let l_val = block.col_to_l[w] as usize;
+
+                                        let val = data[i];
+                                        let phase = phase_map[l_val];
+                                        let norm = ((block.orbit_sizes[local_row] as f64)
+                                            / (block.orbit_sizes[j_val as usize] as f64))
+                                            .sqrt();
+
+                                        vals.push(phase * val * norm * norm_factor);
+                                        rows.push(local_row as i32);
+                                        cols.push(j_val as i32);
+                                    }
                                 }
                             }
                         }
@@ -751,7 +791,9 @@ fn dfs(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
+#[pyo3(signature = (orbits_list, abstract_paths_dict, g_gens_dict, n, d, e, is_squarefree, n_monomials, coset_actions=None, coset_actions_inv=None))]
 fn build_sab_blocks(
     orbits_list: Bound<'_, pyo3::types::PyList>,
     abstract_paths_dict: Bound<'_, pyo3::types::PyDict>,
@@ -761,6 +803,8 @@ fn build_sab_blocks(
     e: usize,
     is_squarefree: bool,
     n_monomials: usize,
+    coset_actions: Option<std::collections::HashMap<usize, numpy::PyReadonlyArray1<u32>>>,
+    coset_actions_inv: Option<std::collections::HashMap<usize, numpy::PyReadonlyArray1<u32>>>,
 ) -> PyResult<RustSABTransform> {
     let mut abstract_paths: HashMap<usize, Vec<(usize, Vec<(usize, usize)>, usize)>> =
         HashMap::new();
@@ -900,7 +944,18 @@ fn build_sab_blocks(
     all_blocks_flat.sort_by_key(|b| b.rep_id);
 
     let mut merged_blocks = Vec::new();
+
+    if let Some(m) = coset_actions.as_ref() {
+        println!(
+            "Rust received coset_actions! Keys: {:?}",
+            m.keys().collect::<Vec<_>>()
+        );
+    } else {
+        println!("Rust received None for coset_actions!");
+    }
+
     let mut current_rep: Option<usize> = None;
+
     let mut current_dim = 0;
     let mut current_e = 0;
     let mut current_orbit_reps_flat = Vec::new();
@@ -913,6 +968,28 @@ fn build_sab_blocks(
     for b in all_blocks_flat {
         if current_rep.is_none() || current_rep.unwrap() != b.rep_id {
             if let Some(rep) = current_rep {
+                let action = coset_actions
+                    .as_ref()
+                    .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
+                let action_inv = coset_actions_inv
+                    .as_ref()
+                    .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
+                let d_k = if let Some(ref a) = action {
+                    a.len() / n_monomials
+                } else {
+                    1
+                };
+
+                println!(
+                    "Evaluating rep {}. In map? {}. d_k: {}",
+                    rep,
+                    coset_actions
+                        .as_ref()
+                        .map(|m| m.contains_key(&rep))
+                        .unwrap_or(false),
+                    d_k
+                );
+
                 merged_blocks.push(RustSABBlock {
                     rep_id: rep,
                     dim: current_dim,
@@ -921,6 +998,9 @@ fn build_sab_blocks(
                     orbit_sizes: current_orbit_sizes.clone(),
                     col_to_j: current_col_to_j.clone(),
                     col_to_l: current_col_to_l.clone(),
+                    d_k,
+                    coset_action: action,
+                    coset_action_inv: action_inv,
                 });
             }
 
@@ -951,6 +1031,17 @@ fn build_sab_blocks(
     }
 
     if let Some(rep) = current_rep {
+        let action = coset_actions
+            .as_ref()
+            .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
+        let action_inv = coset_actions_inv
+            .as_ref()
+            .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
+        let d_k = if let Some(ref a) = action {
+            a.len() / n_monomials
+        } else {
+            1
+        };
         merged_blocks.push(RustSABBlock {
             rep_id: rep,
             dim: current_dim,
@@ -959,6 +1050,9 @@ fn build_sab_blocks(
             orbit_sizes: current_orbit_sizes,
             col_to_j: current_col_to_j,
             col_to_l: current_col_to_l,
+            d_k,
+            coset_action: action,
+            coset_action_inv: action_inv,
         });
     }
 

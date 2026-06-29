@@ -336,22 +336,54 @@ def build_monomial_sab(
     orbits: list[tuple[int, ...]],
     space: "MonomialSpace | SquarefreeMonomialSpace",
     num_threads: int = 1,
+    coset_reps: dict[int, list[Permutation]] | None = None,
 ) -> SABTransform:
+    """
+    Build a Fast SAB Transform for a given space of monomials.
+
+    Args:
+        abstract: The abstract Baum-Clausen paths defining the irreducible representations.
+        G_gens: The generators of the group $G$, mapping generator IDs to `Permutation` objects.
+        orbits: A list of $G$-orbits of monomials, where each orbit is a tuple of monomial IDs.
+        space: The monomial space (`MonomialSpace` or `SquarefreeMonomialSpace`) defining the action.
+        num_threads: The number of threads to use for parallel execution.
+        coset_reps: An optional dictionary mapping representation IDs to a list of coset representatives
+            for $G / H_k$. If provided, this precalculates forward and inverse action matrices enabling
+            the efficient application of Method 1 (Coset Averaging) for evaluating the Reynolds operator.
+
+    Returns:
+        SABTransform: A transform object that can evaluate the SAB basis.
+    """
     from monsab.core._transform import SABTransform
 
     d = space.d
     is_squarefree = isinstance(space, SquarefreeMonomialSpace)
 
-    # Rust expects inverse permutation data (matching the old Python g_inv_data)
     g_inv_dict = {gen_id: list((~gen).data) for gen_id, gen in G_gens.items()}
 
-    # Convert abstract paths: keys are rep_ids, values are lists of (g_k, t_word, lambda_i)
     paths_dict = {}
     for rep_id, path_entries in abstract.paths.items():
         new_entries = []
         for g_k, adm, lambda_i in path_entries:
             new_entries.append((g_k, list(adm), lambda_i))
         paths_dict[rep_id] = new_entries
+
+    import numpy as np
+
+    coset_actions_dict = {}
+    coset_actions_inv_dict = {}
+    if coset_reps is not None:
+        for rep_id, reps in coset_reps.items():
+            actions = np.zeros((len(reps), space.total_monomials), dtype=np.uint32)
+            actions_inv = np.zeros((len(reps), space.total_monomials), dtype=np.uint32)
+            for m, s in enumerate(reps):
+                s_data = s.data
+                s_inv_data = (~s).data
+                for i in range(space.total_monomials):
+                    actions[m, i] = space.apply_gen(i, s_data)
+                    actions_inv[m, i] = space.apply_gen(i, s_inv_data)
+            coset_actions_dict[rep_id] = actions.flatten()
+            coset_actions_inv_dict[rep_id] = actions_inv.flatten()
 
     rust_transform = _backend.build_sab_blocks(
         orbits,
@@ -362,6 +394,8 @@ def build_monomial_sab(
         abstract.e,
         is_squarefree,
         space.total_monomials,
+        coset_actions_dict if coset_reps is not None else None,
+        coset_actions_inv_dict if coset_reps is not None else None,
     )
 
     return SABTransform(_rust_transform=rust_transform)

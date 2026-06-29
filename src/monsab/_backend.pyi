@@ -1,4 +1,6 @@
 import numpy as np
+import numpy.typing
+import numpy
 
 class RustSABBlock:
     rep_id: int
@@ -21,12 +23,14 @@ class RustSABTransform:
     ) -> list[list[tuple[np.ndarray, np.ndarray, np.ndarray, int]]]: ...
 
 def build_sab_blocks(
-    orbits_dict: dict[int, list[int]],
-    abstract_paths_dict: dict[int, list[tuple[int, list[tuple[int, int]], int]]],
-    g_gens_dict: dict[int, list[int]],
+    orbits: list[tuple[int, ...]],
+    paths: dict[int, list[tuple[int, list[int], int]]],
+    g_inv_data: dict[int, list[int]],
     n: int,
     d: int,
     e: int,
     is_squarefree: bool,
-    n_monomials: int,
+    total_monomials: int,
+    coset_actions: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
+    coset_actions_inv: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
 ) -> RustSABTransform: ...
