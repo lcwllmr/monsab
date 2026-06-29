@@ -254,13 +254,21 @@ class BaumClausenStage:
                 M = X_jF @ D0_gi_gj @ X_jF.inverse()
 
                 target_delta_0 = target_extensions[0].matrices[g_i]
-                c_l = (M.vals[0] - target_delta_0.vals[0]) % e
+                X_i_Phi = previous.X_dict[g_i][pi_j_F_id]
+
+                # Correct derived formula: (X * c_0)^a_j * M = X * c_l
+                # => c_l = M + a_j * c_0 + (a_j - 1) * X
+                val_M = M.vals[0] if M.vals else 0
+                val_t0 = target_delta_0.vals[0] if target_delta_0.vals else 0
+                val_X = X_i_Phi.vals[0] if X_i_Phi.vals else 0
+
+                c_l = (val_M + a_j * val_t0 + (a_j - 1) * val_X) % e
 
                 # Find l such that roots[l] corresponds to c_l
-                X_i_Phi = previous.X_dict[g_i][pi_j_F_id]
                 l_idx = None
                 for idx, E in enumerate(target_extensions):
-                    if (E.matrices[g_i].vals[0] - X_i_Phi.vals[0]) % e == c_l:
+                    val_E = E.matrices[g_i].vals[0] if E.matrices[g_i].vals else 0
+                    if val_E == c_l:
                         l_idx = idx
                         break
 
