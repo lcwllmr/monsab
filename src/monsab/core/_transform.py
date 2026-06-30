@@ -22,6 +22,7 @@ class SABBlock:
     orbit_sizes: tuple[int, ...]
     col_to_j: np.ndarray | tuple[int, ...] | list[int]
     col_to_l: np.ndarray | tuple[int, ...] | list[int]
+    fs_indicator: int | None = None
     orbit_reps: tuple[int, ...] = ()
 
 
@@ -30,16 +31,19 @@ class SABTransform:
     _rust_transform: _backend.RustSABTransform | None = None
     _blocks: tuple[SABBlock, ...] | None = None
     _N: int | None = None
+    _realize_skip_reps: set[int] | None = None
 
     def __init__(
         self,
         blocks: tuple[SABBlock, ...] | None = None,
         N: int | None = None,
         _rust_transform: _backend.RustSABTransform | None = None,
+        _realize_skip_reps: set[int] | None = None,
     ):
         object.__setattr__(self, "_rust_transform", _rust_transform)
         object.__setattr__(self, "_blocks", blocks)
         object.__setattr__(self, "_N", N)
+        object.__setattr__(self, "_realize_skip_reps", _realize_skip_reps or set())
 
     @property
     def blocks(self) -> tuple[SABBlock, ...]:
@@ -60,6 +64,7 @@ class SABTransform:
                     orbit_sizes=tuple(b.orbit_sizes),
                     col_to_j=b.col_to_j,
                     col_to_l=b.col_to_l,
+                    fs_indicator=b.fs_indicator,
                 )
             )
         return tuple(result)
@@ -76,6 +81,7 @@ class SABTransform:
         self,
         matrices: list[scipy.sparse.csr_matrix] | scipy.sparse.csr_matrix,
         reynolds: bool = False,
+        realize: bool = False,
     ) -> list[list[scipy.sparse.csr_matrix]]:
         """
         Fast SAB basis block extraction.
@@ -99,17 +105,23 @@ class SABTransform:
             [m.indices for m in matrices],
             [m.indptr for m in matrices],
             reynolds,
+            realize,
         )
 
         final_blocks = []
-        for block_res in results:
+        for block, block_res in zip(self.blocks, results):
+            if realize and self._realize_skip_reps is not None:
+                if block.rep_id in self._realize_skip_reps:
+                    continue
+
             b_list = []
             for data, rows, cols, m_k in block_res:
                 if len(data) == 0:
-                    b_list.append(
-                        scipy.sparse.csr_matrix((m_k, m_k), dtype=np.complex128)
-                    )
+                    dtype = np.float64 if realize else np.complex128
+                    b_list.append(scipy.sparse.csr_matrix((m_k, m_k), dtype=dtype))
                 else:
+                    if realize:
+                        data = np.real(data)
                     mat = scipy.sparse.coo_matrix(
                         (data, (rows, cols)), shape=(m_k, m_k)
                     )
@@ -125,10 +137,14 @@ class SABTransform:
 
     @typing.overload
     def explicit_basis(
-        self, sparse: typing.Literal[False]
-    ) -> list[npt.NDArray[np.complex128]]: ...
+        self, sparse: typing.Literal[False], realize: bool = False
+    ) -> list[npt.NDArray[np.float64 | np.complex128]]: ...
 
-    def explicit_basis(self, sparse: bool = True) -> typing.Any:
+    def explicit_basis(self, sparse: bool = True, realize: bool = False) -> typing.Any:
+        if realize:
+            raise NotImplementedError(
+                "Realization is not yet supported for explicit_basis."
+            )
         matrices = []
         blocks = self.blocks
         if not blocks:

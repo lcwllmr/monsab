@@ -36,7 +36,7 @@ def test_monomial_space_degree_4():
     from monsab.pop._monomials import build_monomial_sab
 
     # Provide a dummy abstract BaumClausenPaths
-    abstract = BaumClausenPaths({0: ()}, 2)
+    abstract = BaumClausenPaths({0: ()}, 2, {0: 0})
     sab = build_monomial_sab(abstract, g, full_orbits[:1], space, num_threads=2)
     assert isinstance(sab, SABTransform)
 
@@ -77,7 +77,7 @@ def test_squarefree_monomial_space():
     from monsab.pop._monomials import build_monomial_sab
 
     # Provide a dummy abstract BaumClausenPaths
-    abstract = BaumClausenPaths({0: ()}, 2)
+    abstract = BaumClausenPaths({0: ()}, 2, {0: 0})
     sab = build_monomial_sab(abstract, g, full_orbits[:1], space, num_threads=2)
     assert isinstance(sab, SABTransform)
 
@@ -100,7 +100,7 @@ def test_sparse_sab_block_structure():
     space = SquarefreeMonomialSpace(4, 2)
     g = {1: Permutation((1, 2, 3, 0))}
     orbits = space.get_full_orbits(g, num_threads=1)
-    abstract = BaumClausenPaths({0: ()}, 4)
+    abstract = BaumClausenPaths({0: ()}, 4, {0: 0})
 
     sab_seq = build_monomial_sab(abstract, g, orbits, space, num_threads=1)
     sab_par = build_monomial_sab(abstract, g, orbits, space, num_threads=4)

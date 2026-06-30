@@ -99,6 +99,11 @@ def main() -> None:
         default=None,
         help="Sparsity factor (average nnz per row/col, can be < 1.0)",
     )
+    parser.add_argument(
+        "--realize",
+        action="store_true",
+        help="Use the realize=True flag to construct a Real SAB transform (default: False)",
+    )
 
     args = parser.parse_args()
     n = args.variables
@@ -242,7 +247,7 @@ def main() -> None:
                 total_elements += mat.shape[0] * mat.shape[1]
 
             start_t = time.perf_counter()
-            _ = transform(batch_matrices)
+            _ = transform(batch_matrices, realize=args.realize)
             end_t = time.perf_counter()
             times.append(end_t - start_t)
 

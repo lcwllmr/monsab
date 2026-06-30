@@ -368,6 +368,125 @@ def build_monomial_sab(
             new_entries.append((g_k, list(adm), lambda_i))
         paths_dict[rep_id] = new_entries
 
+    from collections import deque, Counter
+    import cmath
+
+    identity_data = tuple(range(len(g_inv_dict[next(iter(g_inv_dict))])))
+    visited = {identity_data}
+    queue = deque([identity_data])
+    elements = [identity_data]
+
+    gens_data = list(g_inv_dict.values())
+    import operator
+
+    gens_ig = [operator.itemgetter(*g_data) for g_data in gens_data]
+
+    while queue:
+        curr = queue.popleft()
+        for ig in gens_ig:
+            nxt = ig(curr)
+            if nxt not in visited:
+                visited.add(nxt)
+                queue.append(nxt)
+                elements.append(nxt)
+
+    S_G = Counter()
+    for y in elements:
+        ig_y = operator.itemgetter(*y)
+        y2 = ig_y(y)
+        S_G[y2] += 1
+
+    fs_indicators = {}
+    v_matrices = {}  # to store v for real-type irreps
+
+    for rep_id, paths in abstract.paths.items():
+        if abstract.conjugates.get(rep_id, rep_id) != rep_id:
+            fs_indicators[rep_id] = 0
+            continue
+
+        H_gens = {}
+        char_phases_rep = {}
+        for g_k, t_word, lambda_i in paths:
+            if g_k != 0:
+                H_gens[g_k] = g_inv_dict[g_k]
+                char_phases_rep[g_k] = lambda_i
+
+        H_visited = {identity_data: 0}
+        H_queue = deque([identity_data])
+        H_gens_ig = {
+            g_k: operator.itemgetter(*g_data) for g_k, g_data in H_gens.items()
+        }
+
+        while H_queue:
+            curr = H_queue.popleft()
+            curr_phase = H_visited[curr]
+
+            for g_k, ig in H_gens_ig.items():
+                nxt = ig(curr)
+                if nxt not in H_visited:
+                    nxt_phase = (curr_phase + char_phases_rep[g_k]) % abstract.e
+                    H_visited[nxt] = nxt_phase
+                    H_queue.append(nxt)
+
+        nu2_complex = 0j
+        for h, phase in H_visited.items():
+            if h in S_G:
+                chi_h = cmath.exp(2j * math.pi * phase / abstract.e)
+                nu2_complex += S_G[h] * chi_h
+
+        nu2 = round((nu2_complex / len(H_visited)).real)
+        fs_indicators[rep_id] = nu2
+
+        # If nu2 == 1, check if chi is complex
+        is_complex_chi = False
+        for p in H_visited.values():
+            if p != 0 and p * 2 != abstract.e:
+                is_complex_chi = True
+                break
+
+        if nu2 == 1 and is_complex_chi:
+            # Find t in G \ H such that t^-1 h t = h^-1
+            t_data = None
+            for y in elements:
+                if y in H_visited:
+                    continue
+                # check conjugation
+                conjugates = True
+                for h, phase in H_visited.items():
+                    # h y
+                    hy = tuple(h[i] for i in y)
+                    # y^-1
+                    y_inv = [0] * len(y)
+                    for i, v in enumerate(y):
+                        y_inv[v] = i
+                    y_inv_h_y = tuple(y_inv[i] for i in hy)
+
+                    target_phase = (-phase) % abstract.e
+                    if (
+                        y_inv_h_y not in H_visited
+                        or H_visited[y_inv_h_y] != target_phase
+                    ):
+                        conjugates = False
+                        break
+                if conjugates:
+                    t_data = y
+                    break
+
+            if t_data is not None:
+                t_mapped = tuple(
+                    space.apply_gen(i, t_data) for i in range(space.total_monomials)
+                )
+                v_matrices[rep_id] = t_mapped
+
+    realize_skip_reps = set()
+    matched = set()
+    for r1, nu2 in fs_indicators.items():
+        if nu2 == 0 and r1 not in matched:
+            r2 = abstract.conjugates.get(r1, r1)
+            matched.add(r1)
+            matched.add(r2)
+            realize_skip_reps.add(max(r1, r2))
+
     import numpy as np
 
     coset_actions_dict = {}
@@ -394,11 +513,15 @@ def build_monomial_sab(
         abstract.e,
         is_squarefree,
         space.total_monomials,
+        fs_indicators,
+        v_matrices,
         coset_actions_dict if coset_reps is not None else None,
         coset_actions_inv_dict if coset_reps is not None else None,
     )
 
-    return SABTransform(_rust_transform=rust_transform)
+    return SABTransform(
+        _rust_transform=rust_transform, _realize_skip_reps=realize_skip_reps
+    )
 
 
 def _compute_orbit_chunk_squarefree(

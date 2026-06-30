@@ -2,16 +2,16 @@
 Baum-Clausen algorithm for representations.
 """
 
-from dataclasses import dataclass
+import typing
 from collections import deque
-from types import MappingProxyType
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from monsab.util import extract_roots
 
 from ._matrix import MonomialMatrix
 from ._polycyclic import PolycyclicPresentation, Word
-import typing
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +22,7 @@ class Representation:
     is_induced: bool = False
     children: tuple[int, ...] | None = None
     cluster: tuple[int, ...] | None = None
+    conjugate_ptr: int | None = None
 
     def evaluate(self, word: Word) -> MonomialMatrix:
         """Evaluate a word in the generators to produce a monomial matrix."""
@@ -61,6 +62,7 @@ class BaumClausenStage:
             is_induced=False,
             children=None,
             cluster=None,
+            conjugate_ptr=0,
         )
 
         # 1-based indexing for generators
@@ -234,7 +236,39 @@ class BaumClausenStage:
                 new_representations.append(D)
                 case2_orbits.append((D, orbit))
 
-        # Phase 2: Computation of tau_j and X_j (intertwiners Y_jD)
+        # Phase 3: Wire up conjugate pointers
+        # Build lookup from base id to its extensions
+        base_to_extensions = {base.id: exts for base, exts in case1_clusters}
+        # Build lookup from orbit-representative id to induced representation id
+        rep_to_induced = {rep.id: D.id for D, orbit in case2_orbits for rep in orbit}
+
+        conj_map = {}
+
+        # Rule 3: Extension
+        for base, exts in case1_clusters:
+            conj_base_id = base.conjugate_ptr
+            conj_exts = base_to_extensions[conj_base_id]
+            p_exts = len(exts)
+            for a, D_a in enumerate(exts):
+                conj_a = (-a) % p_exts
+                conj_map[D_a.id] = conj_exts[conj_a].id
+
+        # Rule 2: Induction
+        for D, orbit in case2_orbits:
+            F = orbit[0]
+            conj_F_id = F.conjugate_ptr
+            conj_D_id = rep_to_induced[conj_F_id]
+            conj_map[D.id] = conj_D_id
+
+        # Re-build new representations with conjugate_ptr
+        import dataclasses
+
+        new_representations_wired = tuple(
+            dataclasses.replace(rep, conjugate_ptr=conj_map[rep.id])
+            for rep in new_representations
+        )
+
+        # Phase 4: Computation of tau_j and X_j (intertwiners Y_jD)
         base_to_extensions = {base.id: exts for base, exts in case1_clusters}
         rep_to_induced = {rep.id: D for D, orbit in case2_orbits for rep in orbit}
 
@@ -378,9 +412,6 @@ class BaumClausenStage:
                     perm=tuple(Y_perm), vals=tuple(Y_vals), e=e
                 )
 
-        frozen_X_dict = MappingProxyType(
-            {g_j: MappingProxyType(d) for g_j, d in X_dict.items()}
-        )
         frozen_tau_dict = MappingProxyType(
             {g_j: MappingProxyType(d) for g_j, d in tau_dict.items()}
         )
@@ -388,8 +419,10 @@ class BaumClausenStage:
         return cls(
             level=level,
             e=e,
-            representations=tuple(new_representations),
-            X_dict=frozen_X_dict,
+            representations=new_representations_wired,
+            X_dict=MappingProxyType(
+                {k: MappingProxyType(v) for k, v in X_dict.items()}
+            ),
             tau_dict=frozen_tau_dict,
             power_relations=power_relations,
             conjugation_relations=conjugation_relations,
@@ -404,6 +437,7 @@ class BaumClausenPaths:
     # t_word is a list of (generator, exponent)
     paths: Mapping[int, tuple[tuple[int, tuple[tuple[int, int], ...], int], ...]]
     e: int
+    conjugates: Mapping[int, int]
 
     @classmethod
     def from_baum_clausen(
@@ -438,11 +472,11 @@ class BaumClausenPaths:
 
             lineage.reverse()
 
-            path_data = []
+            lineage_path = []
             for k in range(1, len(stages)):
                 rep = lineage[k]
                 if rep.is_induced:
-                    path_data.append((0, (), 0))  # Placeholder for Case 2
+                    lineage_path.append((0, (), 0))  # Placeholder for Case 2
                     continue
 
                 g_i = g_i_seq[k]
@@ -475,8 +509,13 @@ class BaumClausenPaths:
                         current_pos = mat.perm[current_pos]
 
                 lambda_i = current_val
-                path_data.append((g_i, t_word, lambda_i))
+                lineage_path.append((g_i, t_word, lambda_i))
 
-            paths[D.id] = tuple(path_data)
+            paths[D.id] = tuple(lineage_path)
 
-        return cls(paths=paths, e=e)
+        conjugates = {
+            rep.id: rep.conjugate_ptr
+            for rep in final_stage.representations
+            if rep.conjugate_ptr is not None
+        }
+        return cls(paths=paths, e=e, conjugates=conjugates)
