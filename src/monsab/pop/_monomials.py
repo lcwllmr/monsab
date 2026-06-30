@@ -368,48 +368,45 @@ def build_monomial_sab(
             new_entries.append((g_k, list(adm), lambda_i))
         paths_dict[rep_id] = new_entries
 
-    from collections import deque, Counter
-    import cmath
+    from collections import deque
 
     identity_data = tuple(range(len(g_inv_dict[next(iter(g_inv_dict))])))
-    visited = {identity_data}
-    queue = deque([identity_data])
-    elements = [identity_data]
-
-    gens_data = list(g_inv_dict.values())
     import operator
-
-    gens_ig = [operator.itemgetter(*g_data) for g_data in gens_data]
-
-    while queue:
-        curr = queue.popleft()
-        for ig in gens_ig:
-            nxt = ig(curr)
-            if nxt not in visited:
-                visited.add(nxt)
-                queue.append(nxt)
-                elements.append(nxt)
-
-    S_G = Counter()
-    for y in elements:
-        ig_y = operator.itemgetter(*y)
-        y2 = ig_y(y)
-        S_G[y2] += 1
 
     fs_indicators = {}
     v_matrices = {}  # to store v for real-type irreps
 
+    H_visited_all = {}
+    is_complex_chi_all = {}
+    H_gens_all = {}
     for rep_id, paths in abstract.paths.items():
         if abstract.conjugates.get(rep_id, rep_id) != rep_id:
             fs_indicators[rep_id] = 0
             continue
 
+        is_1d = all(g_k != 0 for g_k, _, _ in paths)
+        if is_1d:
+            # 1D reps that are self-conjugate are real-valued.
+            fs_indicators[rep_id] = 1
+            is_complex_chi_all[rep_id] = False
+            continue
+
         H_gens = {}
+        H_gens_fwd = {}
         char_phases_rep = {}
         for g_k, t_word, lambda_i in paths:
             if g_k != 0:
                 H_gens[g_k] = g_inv_dict[g_k]
+
+                inv_data = g_inv_dict[g_k]
+                fwd_data = [0] * len(inv_data)
+                for i, v in enumerate(inv_data):
+                    fwd_data[v] = i
+                H_gens_fwd[g_k] = tuple(fwd_data)
+
                 char_phases_rep[g_k] = lambda_i
+
+        H_gens_all[rep_id] = (H_gens_fwd, char_phases_rep)
 
         H_visited = {identity_data: 0}
         H_queue = deque([identity_data])
@@ -428,55 +425,34 @@ def build_monomial_sab(
                     H_visited[nxt] = nxt_phase
                     H_queue.append(nxt)
 
-        nu2_complex = 0j
-        for h, phase in H_visited.items():
-            if h in S_G:
-                chi_h = cmath.exp(2j * math.pi * phase / abstract.e)
-                nu2_complex += S_G[h] * chi_h
+        H_visited_all[rep_id] = H_visited
 
-        nu2 = round((nu2_complex / len(H_visited)).real)
-        fs_indicators[rep_id] = nu2
-
-        # If nu2 == 1, check if chi is complex
         is_complex_chi = False
         for p in H_visited.values():
             if p != 0 and p * 2 != abstract.e:
                 is_complex_chi = True
                 break
+        is_complex_chi_all[rep_id] = is_complex_chi
 
-        if nu2 == 1 and is_complex_chi:
-            # Find t in G \ H such that t^-1 h t = h^-1
-            t_data = None
-            for y in elements:
-                if y in H_visited:
-                    continue
-                # check conjugation
-                conjugates = True
-                for h, phase in H_visited.items():
-                    # h y
-                    hy = tuple(h[i] for i in y)
-                    # y^-1
-                    y_inv = [0] * len(y)
-                    for i, v in enumerate(y):
-                        y_inv[v] = i
-                    y_inv_h_y = tuple(y_inv[i] for i in hy)
+    g_gens_data = [list(g.data) for g in G_gens.values()]
+    rust_fs, v_matrices = _backend.compute_fs_and_t_data(
+        g_gens_data,
+        space.n,
+        abstract.e,
+        H_visited_all,
+        {rep_id: H_gens_all[rep_id][0] for rep_id in H_gens_all},
+        {rep_id: H_gens_all[rep_id][1] for rep_id in H_gens_all},
+    )
+    fs_indicators.update(rust_fs)
 
-                    target_phase = (-phase) % abstract.e
-                    if (
-                        y_inv_h_y not in H_visited
-                        or H_visited[y_inv_h_y] != target_phase
-                    ):
-                        conjugates = False
-                        break
-                if conjugates:
-                    t_data = y
-                    break
+    # Optional: Python creates the v_matrices dict missing keys where t_data is None.
+    # We should unpack v_matrices which might have None values.
+    v_matrices = {k: v for k, v in v_matrices.items() if v is not None}
 
-            if t_data is not None:
-                t_mapped = tuple(
-                    space.apply_gen(i, t_data) for i in range(space.total_monomials)
-                )
-                v_matrices[rep_id] = t_mapped
+    for rep_id in H_visited_all.keys():
+        if rep_id not in fs_indicators:
+            # Fallback (handled in Rust, but just in case)
+            pass
 
     realize_skip_reps = set()
     matched = set()
@@ -487,22 +463,17 @@ def build_monomial_sab(
             matched.add(r2)
             realize_skip_reps.add(max(r1, r2))
 
-    import numpy as np
-
-    coset_actions_dict = {}
-    coset_actions_inv_dict = {}
+    coset_reps_dict = {}
+    coset_reps_inv_dict = {}
     if coset_reps is not None:
         for rep_id, reps in coset_reps.items():
-            actions = np.zeros((len(reps), space.total_monomials), dtype=np.uint32)
-            actions_inv = np.zeros((len(reps), space.total_monomials), dtype=np.uint32)
+            reps_data = []
+            reps_inv_data = []
             for m, s in enumerate(reps):
-                s_data = s.data
-                s_inv_data = (~s).data
-                for i in range(space.total_monomials):
-                    actions[m, i] = space.apply_gen(i, s_data)
-                    actions_inv[m, i] = space.apply_gen(i, s_inv_data)
-            coset_actions_dict[rep_id] = actions.flatten()
-            coset_actions_inv_dict[rep_id] = actions_inv.flatten()
+                reps_data.append(list(s.data))
+                reps_inv_data.append(list((~s).data))
+            coset_reps_dict[rep_id] = reps_data
+            coset_reps_inv_dict[rep_id] = reps_inv_data
 
     rust_transform = _backend.build_sab_blocks(
         orbits,
@@ -515,8 +486,8 @@ def build_monomial_sab(
         space.total_monomials,
         fs_indicators,
         v_matrices,
-        coset_actions_dict if coset_reps is not None else None,
-        coset_actions_inv_dict if coset_reps is not None else None,
+        coset_reps_dict if coset_reps is not None else None,
+        coset_reps_inv_dict if coset_reps is not None else None,
     )
 
     return SABTransform(

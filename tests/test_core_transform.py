@@ -66,8 +66,9 @@ def test_transform_edge_cases():
         orbit_reps=(0,),
         orbit_reps_flat=(0,),
         orbit_sizes=(1,),
-        col_to_j=[0],
-        col_to_l=[0],
+        valid_cols=[0],
+        j_values=[0],
+        l_values=[0],
     )
     t = SABTransform(blocks=(b,), N=1)
 
@@ -84,8 +85,9 @@ def test_transform_edge_cases():
         orbit_reps=(0,),
         orbit_reps_flat=(0,),
         orbit_sizes=(1,),
-        col_to_j=[4294967295, 0],
-        col_to_l=[0, 0],
+        valid_cols=[1],
+        j_values=[0],
+        l_values=[0],
     )
     t2 = SABTransform(blocks=(b2,), N=2)
     basis = t2.explicit_basis(sparse=True)

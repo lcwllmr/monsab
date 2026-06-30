@@ -309,15 +309,19 @@ pub struct RustSABBlock {
     pub orbit_reps_flat: Vec<usize>,
     #[pyo3(get)]
     pub orbit_sizes: Vec<usize>,
-    pub col_to_j: Vec<u32>,
-    pub col_to_l: Vec<u32>,
+    pub valid_cols: Vec<u32>,
+    pub j_values: Vec<u32>,
+    pub l_values: Vec<u32>,
     #[pyo3(get)]
     pub d_k: usize,
-    pub coset_action: Option<Vec<u32>>,
-    pub coset_action_inv: Option<Vec<u32>>,
+    pub coset_reps: Option<Vec<Vec<usize>>>,
+    pub coset_reps_inv: Option<Vec<Vec<usize>>>,
     #[pyo3(get)]
     pub fs_indicator: Option<i32>,
     pub v_matrix_data: Option<Vec<usize>>,
+    pub txj_cache: Option<Vec<u32>>,
+    pub v_cols: Option<Vec<Vec<(usize, num_complex::Complex64)>>>,
+    pub v_dagger_rows: Option<Vec<Vec<(usize, num_complex::Complex64)>>>,
 }
 
 #[derive(Clone)]
@@ -326,6 +330,12 @@ pub struct RustSABTransform {
     pub blocks: Vec<RustSABBlock>,
     #[pyo3(get)]
     pub n_monomials: usize,
+    pub n: usize,
+    pub d: usize,
+    pub offsets: Vec<usize>,
+    pub binom_2: Vec<usize>,
+    pub binom_3: Vec<usize>,
+    pub is_squarefree: bool,
 }
 
 #[pymethods]
@@ -387,27 +397,31 @@ impl RustSABTransform {
                         let indices = indices_slices[mat_idx];
                         let indptr = indptr_slices[mat_idx];
 
-                        let mut vals = Vec::new();
-                        let mut rows = Vec::new();
-                        let mut cols = Vec::new();
+                        let mut vals = Vec::with_capacity(block.valid_cols.len());
+                        let mut rows = Vec::with_capacity(block.valid_cols.len());
+                        let mut cols = Vec::with_capacity(block.valid_cols.len());
 
-                        let m_iter = if reynolds && block.coset_action.is_some() {
+                        let m_iter = if reynolds && block.coset_reps.is_some() {
                             block.d_k
                         } else {
                             1
                         };
                         let norm_factor = if reynolds { 1.0 / (m_iter as f64) } else { 1.0 };
-                        let n_total = if let Some(a) = &block.coset_action {
-                            a.len() / block.d_k
-                        } else {
-                            0
-                        };
 
                         for (local_row, &y) in block.orbit_reps_flat.iter().enumerate() {
                             for m in 0..m_iter {
                                 let y_prime = if reynolds {
-                                    if let Some(a_inv) = &block.coset_action_inv {
-                                        a_inv[m * n_total + y] as usize
+                                    if let Some(reps_inv) = &block.coset_reps_inv {
+                                        apply_permutation_arr(
+                                            y,
+                                            &reps_inv[m],
+                                            self.n,
+                                            self.d,
+                                            &self.offsets,
+                                            &self.binom_2,
+                                            &self.binom_3,
+                                            self.is_squarefree,
+                                        )
                                     } else {
                                         y
                                     }
@@ -421,8 +435,17 @@ impl RustSABTransform {
                                 for i in row_start..row_end {
                                     let c = indices[i] as usize;
                                     let w = if reynolds {
-                                        if let Some(a) = &block.coset_action {
-                                            a[m * n_total + c] as usize
+                                        if let Some(reps) = &block.coset_reps {
+                                            apply_permutation_arr(
+                                                c,
+                                                &reps[m],
+                                                self.n,
+                                                self.d,
+                                                &self.offsets,
+                                                &self.binom_2,
+                                                &self.binom_3,
+                                                self.is_squarefree,
+                                            )
                                         } else {
                                             c
                                         }
@@ -430,9 +453,9 @@ impl RustSABTransform {
                                         c
                                     };
 
-                                    let j_val = block.col_to_j[w];
-                                    if j_val != u32::MAX {
-                                        let l_val = block.col_to_l[w] as usize;
+                                    if let Ok(idx) = block.valid_cols.binary_search(&(w as u32)) {
+                                        let j_val = block.j_values[idx];
+                                        let l_val = block.l_values[idx] as usize;
 
                                         let val = data[i];
                                         let phase = phase_map[l_val];
@@ -448,179 +471,112 @@ impl RustSABTransform {
                             }
                         }
                         if realize && block.fs_indicator == Some(0) {
-                            let mut real_vals = Vec::new();
-                            let mut real_rows = Vec::new();
-                            let mut real_cols = Vec::new();
+                            let mut real_vals = Vec::with_capacity(vals.len() * 4);
+                            let mut real_rows = Vec::with_capacity(vals.len() * 4);
+                            let mut real_cols = Vec::with_capacity(vals.len() * 4);
 
                             // For fs = 0, output 2m_k x 2m_k real matrix
                             // T_real = [A, B; -B, A]
                             // where T = A + iB
-
-                            // First group the sums to form T
-                            let mut block_dense =
-                                vec![num_complex::Complex64::new(0.0, 0.0); m_k * m_k];
                             for i in 0..vals.len() {
-                                let r = rows[i] as usize;
-                                let c = cols[i] as usize;
-                                block_dense[r * m_k + c] += vals[i];
-                            }
+                                let r = rows[i];
+                                let c = cols[i];
+                                let v = vals[i];
+                                let m = m_k as i32;
 
-                            for r in 0..m_k {
-                                for c in 0..m_k {
-                                    let v = block_dense[r * m_k + c];
-                                    if v.re.abs() > 1e-12 || v.im.abs() > 1e-12 {
-                                        // A
-                                        real_vals.push(num_complex::Complex64::new(v.re, 0.0));
-                                        real_rows.push(r as i32);
-                                        real_cols.push(c as i32);
-                                        real_vals.push(num_complex::Complex64::new(v.re, 0.0));
-                                        real_rows.push((r + m_k) as i32);
-                                        real_cols.push((c + m_k) as i32);
-                                        // B
-                                        real_vals.push(num_complex::Complex64::new(v.im, 0.0));
-                                        real_rows.push(r as i32);
-                                        real_cols.push((c + m_k) as i32);
-                                        // -B
-                                        real_vals.push(num_complex::Complex64::new(-v.im, 0.0));
-                                        real_rows.push((r + m_k) as i32);
-                                        real_cols.push(c as i32);
-                                    }
+                                if v.re.abs() > 1e-12 || v.im.abs() > 1e-12 {
+                                    // A
+                                    real_vals.push(num_complex::Complex64::new(v.re, 0.0));
+                                    real_rows.push(r);
+                                    real_cols.push(c);
+                                    real_vals.push(num_complex::Complex64::new(v.re, 0.0));
+                                    real_rows.push(r + m);
+                                    real_cols.push(c + m);
+                                    // B
+                                    real_vals.push(num_complex::Complex64::new(v.im, 0.0));
+                                    real_rows.push(r);
+                                    real_cols.push(c + m);
+                                    // -B
+                                    real_vals.push(num_complex::Complex64::new(-v.im, 0.0));
+                                    real_rows.push(r + m);
+                                    real_cols.push(c);
                                 }
                             }
                             block_batch.push((real_vals, real_rows, real_cols, 2 * m_k));
                         } else if realize && block.fs_indicator == Some(-1) {
-                            let mut real_vals = Vec::new();
-                            let mut real_rows = Vec::new();
-                            let mut real_cols = Vec::new();
+                            let mut real_vals = Vec::with_capacity(vals.len() * 4);
+                            let mut real_rows = Vec::with_capacity(vals.len() * 4);
+                            let mut real_cols = Vec::with_capacity(vals.len() * 4);
 
-                            let mut block_dense =
-                                vec![num_complex::Complex64::new(0.0, 0.0); m_k * m_k];
                             for i in 0..vals.len() {
-                                let r = rows[i] as usize;
-                                let c = cols[i] as usize;
-                                block_dense[r * m_k + c] += vals[i];
-                            }
+                                let r = rows[i];
+                                let c = cols[i];
+                                let v = vals[i];
+                                let m = m_k as i32;
 
-                            for r in 0..m_k {
-                                for c in 0..m_k {
-                                    let v = block_dense[r * m_k + c];
-                                    if v.re.abs() > 1e-12 || v.im.abs() > 1e-12 {
-                                        real_vals.push(num_complex::Complex64::new(v.re, 0.0));
-                                        real_rows.push(r as i32);
-                                        real_cols.push(c as i32);
-                                        real_vals.push(num_complex::Complex64::new(v.re, 0.0));
-                                        real_rows.push((r + m_k) as i32);
-                                        real_cols.push((c + m_k) as i32);
-                                        real_vals.push(num_complex::Complex64::new(v.im, 0.0));
-                                        real_rows.push(r as i32);
-                                        real_cols.push((c + m_k) as i32);
-                                        real_vals.push(num_complex::Complex64::new(-v.im, 0.0));
-                                        real_rows.push((r + m_k) as i32);
-                                        real_cols.push(c as i32);
-                                    }
+                                if v.re.abs() > 1e-12 || v.im.abs() > 1e-12 {
+                                    // T_real = [A, B; -B, A]
+                                    real_vals.push(num_complex::Complex64::new(v.re, 0.0));
+                                    real_rows.push(r);
+                                    real_cols.push(c);
+                                    real_vals.push(num_complex::Complex64::new(v.re, 0.0));
+                                    real_rows.push(r + m);
+                                    real_cols.push(c + m);
+                                    real_vals.push(num_complex::Complex64::new(v.im, 0.0));
+                                    real_rows.push(r);
+                                    real_cols.push(c + m);
+                                    real_vals.push(num_complex::Complex64::new(-v.im, 0.0));
+                                    real_rows.push(r + m);
+                                    real_cols.push(c);
                                 }
                             }
-                            block_batch.push((real_vals, real_rows, real_cols, 2 * m_k));
-                        } else if realize && block.fs_indicator == Some(1) {
-                            if let Some(t_data) = &block.v_matrix_data {
-                                let mut real_vals = Vec::new();
-                                let mut real_rows = Vec::new();
-                                let mut real_cols = Vec::new();
 
-                                let mut block_dense =
-                                    vec![num_complex::Complex64::new(0.0, 0.0); m_k * m_k];
+                            block_batch.push((real_vals, real_rows, real_cols, 2 * m_k));
+                        } else if realize
+                            && block.fs_indicator == Some(1)
+                            && block.v_matrix_data.is_some()
+                        {
+                            let mut real_vals = Vec::with_capacity(vals.len() * 2);
+                            let mut real_rows = Vec::with_capacity(vals.len() * 2);
+                            let mut real_cols = Vec::with_capacity(vals.len() * 2);
+
+                            if let (Some(v_cols), Some(v_dagger_rows)) =
+                                (&block.v_cols, &block.v_dagger_rows)
+                            {
+                                let mut tmp2: HashMap<usize, num_complex::Complex64> =
+                                    HashMap::new();
+
                                 for i in 0..vals.len() {
                                     let r = rows[i] as usize;
                                     let c = cols[i] as usize;
-                                    block_dense[r * m_k + c] += vals[i];
-                                }
+                                    let v = vals[i];
 
-                                // Construct V
-                                let mut v_dense =
-                                    vec![num_complex::Complex64::new(0.0, 0.0); m_k * m_k];
-                                let t_data = block.v_matrix_data.as_ref().unwrap();
-                                let mut visited_orbits = vec![false; m_k];
-                                for j in 0..m_k {
-                                    if visited_orbits[j] {
-                                        continue;
-                                    }
-                                    let xj = block.orbit_reps_flat[j];
-                                    let txj = t_data[xj];
-
-                                    // find mapped orbit
-                                    let mut pi_j = usize::MAX;
-                                    let mut h_phase = 0;
-                                    for k in 0..m_k {
-                                        if block.col_to_j[txj] == k as u32 {
-                                            pi_j = k;
-                                            h_phase = block.col_to_l[txj];
-                                            break;
-                                        }
-                                    }
-
-                                    if pi_j == j {
-                                        // diagonal
-                                        let phase = std::f64::consts::PI * 2.0 * (h_phase as f64)
-                                            / (block.e as f64);
-                                        let v_val = num_complex::Complex64::new(
-                                            (phase / 2.0).cos(),
-                                            (phase / 2.0).sin(),
-                                        );
-                                        v_dense[j * m_k + j] = v_val;
-                                        visited_orbits[j] = true;
-                                    } else {
-                                        let phase = std::f64::consts::PI * 2.0 * (h_phase as f64)
-                                            / (block.e as f64);
-                                        let v_val = num_complex::Complex64::new(
-                                            (phase / 2.0).cos(),
-                                            (phase / 2.0).sin(),
-                                        ) / std::f64::consts::SQRT_2;
-                                        v_dense[j * m_k + j] = v_val;
-                                        v_dense[pi_j * m_k + j] = v_val;
-                                        v_dense[j * m_k + pi_j] =
-                                            v_val * num_complex::Complex64::new(0.0, 1.0);
-                                        v_dense[pi_j * m_k + pi_j] =
-                                            v_val * num_complex::Complex64::new(0.0, -1.0);
-                                        visited_orbits[j] = true;
-                                        visited_orbits[pi_j] = true;
-                                    }
-                                }
-
-                                // T_real = V^dagger * T * V
-                                let mut tmp =
-                                    vec![num_complex::Complex64::new(0.0, 0.0); m_k * m_k];
-                                for r in 0..m_k {
-                                    for c in 0..m_k {
-                                        let mut sum = num_complex::Complex64::new(0.0, 0.0);
-                                        for k in 0..m_k {
-                                            sum += block_dense[r * m_k + k] * v_dense[k * m_k + c];
-                                        }
-                                        tmp[r * m_k + c] = sum;
-                                    }
-                                }
-
-                                for r in 0..m_k {
-                                    for c in 0..m_k {
-                                        let mut sum = num_complex::Complex64::new(0.0, 0.0);
-                                        for k in 0..m_k {
-                                            sum += v_dense[k * m_k + r].conj() * tmp[k * m_k + c];
-                                        }
-                                        if sum.re.abs() > 1e-12 {
-                                            real_vals
-                                                .push(num_complex::Complex64::new(sum.re, 0.0));
-                                            real_rows.push(r as i32);
-                                            real_cols.push(c as i32);
+                                    for &(i_idx, v_dag_val) in &v_dagger_rows[r] {
+                                        for &(j_idx, v_val) in &v_cols[c] {
+                                            let val = v_dag_val * v * v_val;
+                                            let flat_idx = i_idx * m_k + j_idx;
+                                            *tmp2.entry(flat_idx).or_insert(
+                                                num_complex::Complex64::new(0.0, 0.0),
+                                            ) += val;
                                         }
                                     }
                                 }
-                                block_batch.push((real_vals, real_rows, real_cols, m_k));
+
+                                for (flat_idx, val) in tmp2 {
+                                    if val.re.abs() > 1e-12 {
+                                        real_vals.push(num_complex::Complex64::new(val.re, 0.0));
+                                        real_rows.push((flat_idx / m_k) as i32);
+                                        real_cols.push((flat_idx % m_k) as i32);
+                                    }
+                                }
                             }
+                            block_batch.push((real_vals, real_rows, real_cols, m_k));
                         } else {
                             if realize {
                                 // Realize true but nu2 = 1 and V is identity/real (no complex chi), output real part only
-                                let mut real_vals = Vec::new();
-                                let mut real_rows = Vec::new();
-                                let mut real_cols = Vec::new();
+                                let mut real_vals = Vec::with_capacity(vals.len());
+                                let mut real_rows = Vec::with_capacity(vals.len());
+                                let mut real_cols = Vec::with_capacity(vals.len());
                                 for i in 0..vals.len() {
                                     if vals[i].re.abs() > 1e-12 {
                                         real_vals
@@ -983,7 +939,7 @@ fn dfs(
 
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (orbits_list, abstract_paths_dict, g_gens_dict, n, d, e, is_squarefree, n_monomials, fs_indicators, v_matrices, coset_actions=None, coset_actions_inv=None))]
+#[pyo3(signature = (orbits_list, abstract_paths_dict, g_gens_dict, n, d, e, is_squarefree, n_monomials, fs_indicators, v_matrices, coset_reps=None, coset_reps_inv=None))]
 fn build_sab_blocks(
     orbits_list: Bound<'_, pyo3::types::PyList>,
     abstract_paths_dict: Bound<'_, pyo3::types::PyDict>,
@@ -995,8 +951,8 @@ fn build_sab_blocks(
     n_monomials: usize,
     fs_indicators: Bound<'_, pyo3::types::PyDict>,
     v_matrices: Bound<'_, pyo3::types::PyDict>,
-    coset_actions: Option<std::collections::HashMap<usize, numpy::PyReadonlyArray1<u32>>>,
-    coset_actions_inv: Option<std::collections::HashMap<usize, numpy::PyReadonlyArray1<u32>>>,
+    coset_reps: Option<std::collections::HashMap<usize, Vec<Vec<usize>>>>,
+    coset_reps_inv: Option<std::collections::HashMap<usize, Vec<Vec<usize>>>>,
 ) -> PyResult<RustSABTransform> {
     let mut abstract_paths: HashMap<usize, Vec<(usize, Vec<(usize, usize)>, usize)>> =
         HashMap::new();
@@ -1144,21 +1100,17 @@ fn build_sab_blocks(
     let mut current_orbit_reps_flat = Vec::new();
     let mut current_orbit_sizes = Vec::new();
 
-    // Dense arrays for memory optimization
-    let mut current_col_to_j = vec![u32::MAX; n_monomials];
-    let mut current_col_to_l = vec![0_u32; n_monomials];
+    let mut current_valid_cols = Vec::new();
+    let mut current_j_values = Vec::new();
+    let mut current_l_values = Vec::new();
 
     for b in all_blocks_flat {
         if current_rep.is_none() || current_rep.unwrap() != b.rep_id {
             if let Some(rep) = current_rep {
-                let action = coset_actions
-                    .as_ref()
-                    .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
-                let action_inv = coset_actions_inv
-                    .as_ref()
-                    .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
-                let d_k = if let Some(ref a) = action {
-                    a.len() / n_monomials
+                let action_fwd = coset_reps.as_ref().and_then(|m| m.get(&rep).cloned());
+                let action_inv = coset_reps_inv.as_ref().and_then(|m| m.get(&rep).cloned());
+                let d_k = if let Some(ref a) = action_fwd {
+                    a.len()
                 } else {
                     1
                 };
@@ -1174,19 +1126,119 @@ fn build_sab_blocks(
                     .flatten()
                     .and_then(|v| v.extract::<Vec<usize>>().ok());
 
+                let mut sorted_indices: Vec<usize> = (0..current_valid_cols.len()).collect();
+                sorted_indices.sort_unstable_by_key(|&i| current_valid_cols[i]);
+
+                let mut sorted_valid = Vec::with_capacity(current_valid_cols.len());
+                let mut sorted_j = Vec::with_capacity(current_valid_cols.len());
+                let mut sorted_l = Vec::with_capacity(current_valid_cols.len());
+
+                for i in sorted_indices {
+                    sorted_valid.push(current_valid_cols[i]);
+                    sorted_j.push(current_j_values[i]);
+                    sorted_l.push(current_l_values[i]);
+                }
+
+                let mut v_cols = None;
+                let mut v_dagger_rows = None;
+                let mut txj_cache = None;
+                if let Some(t_data) = &v_mat {
+                    let mut cache = Vec::with_capacity(current_dim);
+                    for j in 0..current_dim {
+                        let xj = current_orbit_reps_flat[j];
+                        let txj = apply_permutation_arr(
+                            xj,
+                            t_data,
+                            n,
+                            d,
+                            &offsets,
+                            &binom_2,
+                            &binom_3,
+                            is_squarefree,
+                        );
+                        cache.push(txj as u32);
+                    }
+
+                    if fs_ind == Some(1) {
+                        let mut vs = vec![Vec::new(); current_dim];
+                        let mut vd = vec![Vec::new(); current_dim];
+                        let mut visited_orbits = vec![false; current_dim];
+                        for j in 0..current_dim {
+                            if visited_orbits[j] {
+                                continue;
+                            }
+                            let txj = cache[j];
+
+                            let mut pi_j = usize::MAX;
+                            let mut h_phase = 0;
+                            if let Ok(idx) = sorted_valid.binary_search(&{ txj }) {
+                                pi_j = sorted_j[idx] as usize;
+                                h_phase = sorted_l[idx];
+                            }
+
+                            if pi_j == j {
+                                let phase =
+                                    std::f64::consts::PI * 2.0 * (h_phase as f64) / (e as f64);
+                                let v_val = num_complex::Complex64::new(
+                                    (phase / 2.0).cos(),
+                                    (phase / 2.0).sin(),
+                                );
+                                vs[j].push((j, v_val));
+                                vd[j].push((j, v_val.conj()));
+                                visited_orbits[j] = true;
+                            } else {
+                                let phase =
+                                    std::f64::consts::PI * 2.0 * (h_phase as f64) / (e as f64);
+                                let v_val = num_complex::Complex64::new(
+                                    (phase / 2.0).cos(),
+                                    (phase / 2.0).sin(),
+                                ) / std::f64::consts::SQRT_2;
+
+                                vs[j].push((j, v_val));
+                                vs[j].push((pi_j, v_val));
+                                vs[pi_j].push((j, v_val * num_complex::Complex64::new(0.0, 1.0)));
+                                vs[pi_j]
+                                    .push((pi_j, v_val * num_complex::Complex64::new(0.0, -1.0)));
+
+                                vd[j].push((j, v_val.conj()));
+                                vd[pi_j].push((j, v_val.conj()));
+                                vd[j].push((
+                                    pi_j,
+                                    (v_val * num_complex::Complex64::new(0.0, 1.0)).conj(),
+                                ));
+                                vd[pi_j].push((
+                                    pi_j,
+                                    (v_val * num_complex::Complex64::new(0.0, -1.0)).conj(),
+                                ));
+
+                                visited_orbits[j] = true;
+                                visited_orbits[pi_j] = true;
+                            }
+                        }
+                        v_cols = Some(vs);
+                        v_dagger_rows = Some(vd);
+                    }
+
+                    txj_cache = Some(cache);
+                }
+
                 merged_blocks.push(RustSABBlock {
                     rep_id: rep,
                     dim: current_dim,
                     e: current_e,
                     orbit_reps_flat: current_orbit_reps_flat.clone(),
                     orbit_sizes: current_orbit_sizes.clone(),
-                    col_to_j: current_col_to_j.clone(),
-                    col_to_l: current_col_to_l.clone(),
+                    valid_cols: sorted_valid,
+                    j_values: sorted_j,
+                    l_values: sorted_l,
                     d_k,
-                    coset_action: action,
-                    coset_action_inv: action_inv,
+                    coset_reps: action_fwd,
+                    coset_reps_inv: action_inv,
                     fs_indicator: fs_ind,
                     v_matrix_data: v_mat,
+                    txj_cache,
+                    v_cols,
+                    v_dagger_rows,
                 });
             }
 
@@ -1196,12 +1248,14 @@ fn build_sab_blocks(
             current_orbit_reps_flat = b.orbit_reps_flat.clone();
             current_orbit_sizes = b.orbit_sizes.clone();
 
-            current_col_to_j.fill(u32::MAX);
-            current_col_to_l.fill(0_u32);
+            current_valid_cols.clear();
+            current_j_values.clear();
+            current_l_values.clear();
 
             for (i, &col) in b.valid_cols.iter().enumerate() {
-                current_col_to_j[col] = b.j_values[i] as u32;
-                current_col_to_l[col] = b.l_values[i] as u32;
+                current_valid_cols.push(col as u32);
+                current_j_values.push(b.j_values[i] as u32);
+                current_l_values.push(b.l_values[i] as u32);
             }
         } else {
             let dim_offset = current_dim;
@@ -1210,21 +1264,18 @@ fn build_sab_blocks(
             current_orbit_sizes.extend_from_slice(&b.orbit_sizes);
 
             for (i, &col) in b.valid_cols.iter().enumerate() {
-                current_col_to_j[col] = (b.j_values[i] + dim_offset) as u32;
-                current_col_to_l[col] = b.l_values[i] as u32;
+                current_valid_cols.push(col as u32);
+                current_j_values.push((b.j_values[i] + dim_offset) as u32);
+                current_l_values.push(b.l_values[i] as u32);
             }
         }
     }
 
     if let Some(rep) = current_rep {
-        let action = coset_actions
-            .as_ref()
-            .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
-        let action_inv = coset_actions_inv
-            .as_ref()
-            .and_then(|m| m.get(&rep).map(|a| a.as_array().to_vec()));
-        let d_k = if let Some(ref a) = action {
-            a.len() / n_monomials
+        let action_fwd = coset_reps.as_ref().and_then(|m| m.get(&rep).cloned());
+        let action_inv = coset_reps_inv.as_ref().and_then(|m| m.get(&rep).cloned());
+        let d_k = if let Some(ref a) = action_fwd {
+            a.len()
         } else {
             1
         };
@@ -1239,47 +1290,311 @@ fn build_sab_blocks(
             .flatten()
             .and_then(|v| v.extract::<Vec<usize>>().ok());
 
+        let mut sorted_indices: Vec<usize> = (0..current_valid_cols.len()).collect();
+        sorted_indices.sort_unstable_by_key(|&i| current_valid_cols[i]);
+
+        let mut sorted_valid = Vec::with_capacity(current_valid_cols.len());
+        let mut sorted_j = Vec::with_capacity(current_valid_cols.len());
+        let mut sorted_l = Vec::with_capacity(current_valid_cols.len());
+
+        for i in sorted_indices {
+            sorted_valid.push(current_valid_cols[i]);
+            sorted_j.push(current_j_values[i]);
+            sorted_l.push(current_l_values[i]);
+        }
+
+        let mut v_cols = None;
+        let mut v_dagger_rows = None;
+        let mut txj_cache = None;
+        if let Some(t_data) = &v_mat {
+            let mut cache = Vec::with_capacity(current_dim);
+            for j in 0..current_dim {
+                let xj = current_orbit_reps_flat[j];
+                let txj = apply_permutation_arr(
+                    xj,
+                    t_data,
+                    n,
+                    d,
+                    &offsets,
+                    &binom_2,
+                    &binom_3,
+                    is_squarefree,
+                );
+                cache.push(txj as u32);
+            }
+
+            if fs_ind == Some(1) {
+                let mut vs = vec![Vec::new(); current_dim];
+                let mut vd = vec![Vec::new(); current_dim];
+                let mut visited_orbits = vec![false; current_dim];
+                for j in 0..current_dim {
+                    if visited_orbits[j] {
+                        continue;
+                    }
+                    let txj = cache[j];
+
+                    let mut pi_j = usize::MAX;
+                    let mut h_phase = 0;
+                    if let Ok(idx) = sorted_valid.binary_search(&{ txj }) {
+                        pi_j = sorted_j[idx] as usize;
+                        h_phase = sorted_l[idx];
+                    }
+
+                    if pi_j == j {
+                        let phase = std::f64::consts::PI * 2.0 * (h_phase as f64) / (e as f64);
+                        let v_val =
+                            num_complex::Complex64::new((phase / 2.0).cos(), (phase / 2.0).sin());
+                        vs[j].push((j, v_val));
+                        vd[j].push((j, v_val.conj()));
+                        visited_orbits[j] = true;
+                    } else {
+                        let phase = std::f64::consts::PI * 2.0 * (h_phase as f64) / (e as f64);
+                        let v_val =
+                            num_complex::Complex64::new((phase / 2.0).cos(), (phase / 2.0).sin())
+                                / std::f64::consts::SQRT_2;
+
+                        vs[j].push((j, v_val));
+                        vs[j].push((pi_j, v_val));
+                        vs[pi_j].push((j, v_val * num_complex::Complex64::new(0.0, 1.0)));
+                        vs[pi_j].push((pi_j, v_val * num_complex::Complex64::new(0.0, -1.0)));
+
+                        vd[j].push((j, v_val.conj()));
+                        vd[pi_j].push((j, v_val.conj()));
+                        vd[j].push((pi_j, (v_val * num_complex::Complex64::new(0.0, 1.0)).conj()));
+                        vd[pi_j].push((
+                            pi_j,
+                            (v_val * num_complex::Complex64::new(0.0, -1.0)).conj(),
+                        ));
+
+                        visited_orbits[j] = true;
+                        visited_orbits[pi_j] = true;
+                    }
+                }
+                v_cols = Some(vs);
+                v_dagger_rows = Some(vd);
+            }
+
+            txj_cache = Some(cache);
+        }
+
         merged_blocks.push(RustSABBlock {
             rep_id: rep,
             dim: current_dim,
             e: current_e,
             orbit_reps_flat: current_orbit_reps_flat,
             orbit_sizes: current_orbit_sizes,
-            col_to_j: current_col_to_j,
-            col_to_l: current_col_to_l,
+            valid_cols: sorted_valid,
+            j_values: sorted_j,
+            l_values: sorted_l,
             d_k,
-            coset_action: action,
-            coset_action_inv: action_inv,
+            coset_reps: action_fwd,
+            coset_reps_inv: action_inv,
             fs_indicator: fs_ind,
             v_matrix_data: v_mat,
+            txj_cache,
+            v_cols,
+            v_dagger_rows,
         });
     }
 
     Ok(RustSABTransform {
         blocks: merged_blocks,
         n_monomials,
+        n,
+        d,
+        offsets,
+        binom_2,
+        binom_3,
+        is_squarefree,
     })
+}
+
+use std::collections::{HashSet, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+fn hash_vec(v: &[usize]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    v.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[pyfunction]
+#[pyo3(signature = (g_gens, n, e, h_visited_all, h_gens_fwd_all, char_phases_rep_all))]
+fn compute_fs_and_t_data(
+    g_gens: Vec<Vec<usize>>,
+    n: usize,
+    e: usize,
+    h_visited_all: HashMap<usize, HashMap<Vec<usize>, usize>>,
+    h_gens_fwd_all: HashMap<usize, HashMap<usize, Vec<usize>>>,
+    char_phases_rep_all: HashMap<usize, HashMap<usize, usize>>,
+) -> PyResult<(HashMap<usize, i32>, HashMap<usize, Option<Vec<usize>>>)> {
+    let mut fs_indicators = HashMap::new();
+    let mut needs_t_data = HashSet::new();
+
+    let mut nu2_complex_all = HashMap::new();
+    for &rep_id in h_visited_all.keys() {
+        nu2_complex_all.insert(rep_id, Complex64::new(0.0, 0.0));
+    }
+
+    if !h_visited_all.is_empty() {
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        let identity: Vec<usize> = (0..n).collect();
+        visited.insert(hash_vec(&identity));
+        queue.push_back(identity);
+
+        while let Some(curr) = queue.pop_front() {
+            let mut y2 = vec![0; n];
+            for i in 0..n {
+                y2[i] = curr[curr[i]];
+            }
+
+            for (rep_id, h_visited) in &h_visited_all {
+                if let Some(&phase) = h_visited.get(&y2) {
+                    let angle = 2.0 * std::f64::consts::PI * (phase as f64) / (e as f64);
+                    let chi_h = Complex64::new(angle.cos(), angle.sin());
+                    *nu2_complex_all.get_mut(rep_id).unwrap() += chi_h;
+                }
+            }
+
+            for gen in &g_gens {
+                let mut nxt = vec![0; n];
+                for i in 0..n {
+                    nxt[i] = curr[gen[i]];
+                }
+                if visited.insert(hash_vec(&nxt)) {
+                    queue.push_back(nxt);
+                }
+            }
+        }
+    }
+
+    for (rep_id, h_visited) in &h_visited_all {
+        let nu2_complex = nu2_complex_all[rep_id];
+        let h_len = h_visited.len() as f64;
+        let nu2 = (nu2_complex.re / h_len).round() as i32;
+        fs_indicators.insert(*rep_id, nu2);
+
+        let mut is_complex_chi = false;
+        for &p in h_visited.values() {
+            if p != 0 && p * 2 != e {
+                is_complex_chi = true;
+                break;
+            }
+        }
+
+        if nu2 == 1 && is_complex_chi {
+            needs_t_data.insert(*rep_id);
+        }
+    }
+
+    let mut found_t_data = HashMap::new();
+    for &rep_id in &needs_t_data {
+        found_t_data.insert(rep_id, None);
+    }
+
+    if !needs_t_data.is_empty() {
+        let mut visited_t = HashSet::new();
+        let mut queue_t = VecDeque::new();
+        let identity: Vec<usize> = (0..n).collect();
+        visited_t.insert(hash_vec(&identity));
+        queue_t.push_back(identity);
+
+        while let Some(y) = queue_t.pop_front() {
+            let mut reps_to_remove = Vec::new();
+
+            for &rep_id in &needs_t_data {
+                let h_visited = &h_visited_all[&rep_id];
+                if h_visited.contains_key(&y) {
+                    continue;
+                }
+
+                let mut conjugates = true;
+                let h_gens_fwd = &h_gens_fwd_all[&rep_id];
+                let char_phases = &char_phases_rep_all[&rep_id];
+
+                for (g_k, h) in h_gens_fwd {
+                    let phase = char_phases[g_k];
+                    let mut hy = vec![0; n];
+                    for i in 0..n {
+                        hy[i] = y[h[i]];
+                    }
+                    let mut y_inv = vec![0; n];
+                    for i in 0..n {
+                        y_inv[y[i]] = i;
+                    }
+                    let mut y_inv_h_y = vec![0; n];
+                    for i in 0..n {
+                        y_inv_h_y[i] = y_inv[hy[i]];
+                    }
+
+                    let target_phase = (e - phase) % e;
+                    if let Some(&p) = h_visited.get(&y_inv_h_y) {
+                        if p != target_phase {
+                            conjugates = false;
+                            break;
+                        }
+                    } else {
+                        conjugates = false;
+                        break;
+                    }
+                }
+
+                if conjugates {
+                    found_t_data.insert(rep_id, Some(y.clone()));
+                    reps_to_remove.push(rep_id);
+                }
+            }
+
+            for rep_id in reps_to_remove {
+                needs_t_data.remove(&rep_id);
+            }
+
+            if needs_t_data.is_empty() {
+                break;
+            }
+
+            for gen in &g_gens {
+                let mut nxt = vec![0; n];
+                for i in 0..n {
+                    nxt[i] = y[gen[i]];
+                }
+                if visited_t.insert(hash_vec(&nxt)) {
+                    queue_t.push_back(nxt);
+                }
+            }
+        }
+    }
+
+    Ok((fs_indicators, found_t_data))
 }
 
 #[pymodule]
 fn _backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustSABTransform>()?;
     m.add_function(wrap_pyfunction!(build_sab_blocks, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_fs_and_t_data, m)?)?;
     Ok(())
 }
 
 #[pymethods]
 impl RustSABBlock {
     #[getter]
-    fn get_col_to_j<'py>(&self, py: pyo3::Python<'py>) -> pyo3::Bound<'py, numpy::PyArray1<u32>> {
+    fn get_valid_cols<'py>(&self, py: pyo3::Python<'py>) -> pyo3::Bound<'py, numpy::PyArray1<u32>> {
         use numpy::IntoPyArray;
-        self.col_to_j.clone().into_pyarray(py)
+        self.valid_cols.clone().into_pyarray(py)
     }
 
     #[getter]
-    fn get_col_to_l<'py>(&self, py: pyo3::Python<'py>) -> pyo3::Bound<'py, numpy::PyArray1<u32>> {
+    fn get_j_values<'py>(&self, py: pyo3::Python<'py>) -> pyo3::Bound<'py, numpy::PyArray1<u32>> {
         use numpy::IntoPyArray;
-        self.col_to_l.clone().into_pyarray(py)
+        self.j_values.clone().into_pyarray(py)
+    }
+
+    #[getter]
+    fn get_l_values<'py>(&self, py: pyo3::Python<'py>) -> pyo3::Bound<'py, numpy::PyArray1<u32>> {
+        use numpy::IntoPyArray;
+        self.l_values.clone().into_pyarray(py)
     }
 }
 

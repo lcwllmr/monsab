@@ -20,8 +20,9 @@ class SABBlock:
     e: int
     orbit_reps_flat: tuple[int, ...]
     orbit_sizes: tuple[int, ...]
-    col_to_j: np.ndarray | tuple[int, ...] | list[int]
-    col_to_l: np.ndarray | tuple[int, ...] | list[int]
+    valid_cols: np.ndarray | tuple[int, ...] | list[int]
+    j_values: np.ndarray | tuple[int, ...] | list[int]
+    l_values: np.ndarray | tuple[int, ...] | list[int]
     fs_indicator: int | None = None
     orbit_reps: tuple[int, ...] = ()
 
@@ -62,8 +63,9 @@ class SABTransform:
                     e=b.e,
                     orbit_reps_flat=tuple(b.orbit_reps_flat),
                     orbit_sizes=tuple(b.orbit_sizes),
-                    col_to_j=b.col_to_j,
-                    col_to_l=b.col_to_l,
+                    valid_cols=b.valid_cols,
+                    j_values=b.j_values,
+                    l_values=b.l_values,
                     fs_indicator=b.fs_indicator,
                 )
             )
@@ -157,12 +159,9 @@ class SABTransform:
             e = block.e
             orbit_sizes = block.orbit_sizes
 
-            col_to_j = np.asarray(block.col_to_j, dtype=np.uint32)
-            col_to_l = np.asarray(block.col_to_l, dtype=np.uint32)
-
-            valid_cols = np.where(col_to_j != 4294967295)[0]
-            j_values = col_to_j[valid_cols]
-            l_values = col_to_l[valid_cols]
+            valid_cols = np.asarray(block.valid_cols, dtype=np.uint32)
+            j_values = np.asarray(block.j_values, dtype=np.uint32)
+            l_values = np.asarray(block.l_values, dtype=np.uint32)
 
             if sparse:
                 vals = np.exp(-2j * np.pi * l_values / e) / np.sqrt(

@@ -8,8 +8,9 @@ class RustSABBlock:
     e: int
     orbit_reps_flat: list[int]
     orbit_sizes: list[int]
-    col_to_j: np.ndarray
-    col_to_l: np.ndarray
+    valid_cols: np.ndarray
+    j_values: np.ndarray
+    l_values: np.ndarray
 
 class RustSABTransform:
     blocks: list[RustSABBlock]

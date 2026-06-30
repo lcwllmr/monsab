@@ -111,8 +111,9 @@ def test_sparse_sab_block_structure():
     for b_seq, b_par in zip(sab_seq.blocks, sab_par.blocks):
         assert b_seq.rep_id == b_par.rep_id
         assert b_seq.dim == b_par.dim
-        np.testing.assert_array_equal(b_seq.col_to_j, b_par.col_to_j)
-        np.testing.assert_array_equal(b_seq.col_to_l, b_par.col_to_l)
+        np.testing.assert_array_equal(b_seq.valid_cols, b_par.valid_cols)
+        np.testing.assert_array_equal(b_seq.j_values, b_par.j_values)
+        np.testing.assert_array_equal(b_seq.l_values, b_par.l_values)
 
     # Check explicit basis to ensure sparse values are correct
     basis_seq = sab_seq.explicit_basis(sparse=False)
