@@ -19,6 +19,7 @@ Issues = "https://github.com/lcwllmr/monsab/issues"
 
 [dependency-groups]
 dev = [
+    "cvxpy>=1.9.2",
     "matplotlib>=3.11.0",
     "maturin>=1.14.1",
     "pdoc3>=0.11.6",
