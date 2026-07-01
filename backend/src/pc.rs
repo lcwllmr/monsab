@@ -1,3 +1,4 @@
+use crate::permutation::Permutation;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
@@ -9,7 +10,7 @@ pub struct PcGroup {
     pub conjugation_exponents: HashMap<(usize, usize), usize>,
     pub power_tails: HashMap<usize, Vec<(usize, usize)>>,
     pub conjugation_tails: HashMap<(usize, usize), Vec<(usize, usize)>>,
-    pub generators: Vec<Vec<u32>>,
+    pub generators: Vec<Permutation>,
 }
 
 #[pymethods]
@@ -22,15 +23,27 @@ impl PcGroup {
         conjugation_exponents: HashMap<(usize, usize), usize>,
         power_tails: HashMap<usize, Vec<(usize, usize)>>,
         conjugation_tails: HashMap<(usize, usize), Vec<(usize, usize)>>,
-        generators: Vec<Vec<u32>>,
-    ) -> Self {
-        Self {
+        generators: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let mut perms = Vec::with_capacity(generators.len());
+        for gen in generators {
+            if let Ok(p) = gen.extract::<Permutation>() {
+                perms.push(p);
+            } else if let Ok(data) = gen.extract::<Vec<usize>>() {
+                perms.push(Permutation::new(data));
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "generators must be Permutation instances or sequences of integers",
+                ));
+            }
+        }
+        Ok(Self {
             number_of_generators,
             orders,
             conjugation_exponents,
             power_tails,
             conjugation_tails,
-            generators,
-        }
+            generators: perms,
+        })
     }
 }

@@ -1,10 +1,11 @@
 use crate::pc::PcGroup;
+use crate::permutation::Permutation;
 use fxhash::FxHashMap;
 use pyo3::prelude::*;
 
 pub trait Monomial<const D: usize>: Clone + Ord + Eq + std::hash::Hash {
     fn normalize(&mut self);
-    fn permute(&self, p: &[u32]) -> Self;
+    fn permute(&self, p: &Permutation) -> Self;
     fn from_slice(slice: &[u32]) -> Self;
     fn to_vec(&self) -> Vec<u32>;
 }
@@ -21,10 +22,10 @@ impl<const D: usize> Monomial<D> for StandardMonomial<D> {
     }
 
     #[inline(always)]
-    fn permute(&self, p: &[u32]) -> Self {
+    fn permute(&self, p: &Permutation) -> Self {
         let mut next = [0; D];
         for i in 0..D {
-            next[i] = p[self.vars[i] as usize];
+            next[i] = p.apply(self.vars[i] as usize) as u32;
         }
         let mut m = StandardMonomial { vars: next };
         m.normalize();
@@ -58,10 +59,10 @@ impl<const D: usize> Monomial<D> for SquarefreeMonomial<D> {
     }
 
     #[inline(always)]
-    fn permute(&self, p: &[u32]) -> Self {
+    fn permute(&self, p: &Permutation) -> Self {
         let mut next = [0; D];
         for i in 0..D {
-            next[i] = p[self.vars[i] as usize];
+            next[i] = p.apply(self.vars[i] as usize) as u32;
         }
         let mut m = SquarefreeMonomial { vars: next };
         m.normalize();

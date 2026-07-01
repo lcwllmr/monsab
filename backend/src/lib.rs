@@ -13,10 +13,14 @@ use std::cmp;
 use std::collections::HashMap;
 
 pub mod action;
+pub mod matrix;
 pub mod pc;
+pub mod permutation;
 
 use action::PyOrbitLifter;
+use matrix::MonomialMatrix;
 use pc::PcGroup;
+use permutation::Permutation;
 fn factorial(n: usize) -> f64 {
     (1..=n).map(|v| v as f64).product()
 }
@@ -1579,6 +1583,8 @@ fn _backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustSABTransform>()?;
     m.add_class::<PcGroup>()?;
     m.add_class::<PyOrbitLifter>()?;
+    m.add_class::<Permutation>()?;
+    m.add_class::<MonomialMatrix>()?;
     m.add_function(wrap_pyfunction!(build_sab_blocks, m)?)?;
     m.add_function(wrap_pyfunction!(compute_fs_and_t_data, m)?)?;
     Ok(())
