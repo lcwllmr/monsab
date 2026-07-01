@@ -86,12 +86,12 @@ impl<const D: usize> Monomial<D> for SquarefreeMonomial<D> {
     }
 }
 
-pub struct OrbitLifter<M: Monomial<D>, const D: usize> {
+pub struct InternalOrbitLifter<M: Monomial<D>, const D: usize> {
     group: PcGroup,
     cache: Vec<FxHashMap<M, M>>,
 }
 
-impl<M: Monomial<D>, const D: usize> OrbitLifter<M, D> {
+impl<M: Monomial<D>, const D: usize> InternalOrbitLifter<M, D> {
     pub fn new(group: PcGroup) -> Self {
         let levels = group.orders.len() + 1;
         let mut cache = Vec::with_capacity(levels);
@@ -147,34 +147,34 @@ impl<M: Monomial<D>, const D: usize> OrbitLifter<M, D> {
 }
 
 enum LifterState {
-    Std1(OrbitLifter<StandardMonomial<1>, 1>),
-    Std2(OrbitLifter<StandardMonomial<2>, 2>),
-    Std3(OrbitLifter<StandardMonomial<3>, 3>),
-    Std4(OrbitLifter<StandardMonomial<4>, 4>),
-    Sq1(OrbitLifter<SquarefreeMonomial<1>, 1>),
-    Sq2(OrbitLifter<SquarefreeMonomial<2>, 2>),
-    Sq3(OrbitLifter<SquarefreeMonomial<3>, 3>),
-    Sq4(OrbitLifter<SquarefreeMonomial<4>, 4>),
+    Std1(InternalOrbitLifter<StandardMonomial<1>, 1>),
+    Std2(InternalOrbitLifter<StandardMonomial<2>, 2>),
+    Std3(InternalOrbitLifter<StandardMonomial<3>, 3>),
+    Std4(InternalOrbitLifter<StandardMonomial<4>, 4>),
+    Sq1(InternalOrbitLifter<SquarefreeMonomial<1>, 1>),
+    Sq2(InternalOrbitLifter<SquarefreeMonomial<2>, 2>),
+    Sq3(InternalOrbitLifter<SquarefreeMonomial<3>, 3>),
+    Sq4(InternalOrbitLifter<SquarefreeMonomial<4>, 4>),
 }
 
 #[pyclass]
-pub struct PyOrbitLifter {
+pub struct OrbitLifter {
     state: LifterState,
 }
 
 #[pymethods]
-impl PyOrbitLifter {
+impl OrbitLifter {
     #[new]
     pub fn new(group: PcGroup, d: usize, is_squarefree: bool) -> PyResult<Self> {
         let state = match (d, is_squarefree) {
-            (1, false) => LifterState::Std1(OrbitLifter::new(group)),
-            (2, false) => LifterState::Std2(OrbitLifter::new(group)),
-            (3, false) => LifterState::Std3(OrbitLifter::new(group)),
-            (4, false) => LifterState::Std4(OrbitLifter::new(group)),
-            (1, true) => LifterState::Sq1(OrbitLifter::new(group)),
-            (2, true) => LifterState::Sq2(OrbitLifter::new(group)),
-            (3, true) => LifterState::Sq3(OrbitLifter::new(group)),
-            (4, true) => LifterState::Sq4(OrbitLifter::new(group)),
+            (1, false) => LifterState::Std1(InternalOrbitLifter::new(group)),
+            (2, false) => LifterState::Std2(InternalOrbitLifter::new(group)),
+            (3, false) => LifterState::Std3(InternalOrbitLifter::new(group)),
+            (4, false) => LifterState::Std4(InternalOrbitLifter::new(group)),
+            (1, true) => LifterState::Sq1(InternalOrbitLifter::new(group)),
+            (2, true) => LifterState::Sq2(InternalOrbitLifter::new(group)),
+            (3, true) => LifterState::Sq3(InternalOrbitLifter::new(group)),
+            (4, true) => LifterState::Sq4(InternalOrbitLifter::new(group)),
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "Unsupported degree D > 4 or D = 0",

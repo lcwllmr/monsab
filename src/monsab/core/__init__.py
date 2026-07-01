@@ -2,19 +2,27 @@
 Core algorithms and data structures.
 """
 
-from ._baum_clausen import BaumClausenStage, Representation, BaumClausenPaths
-from ._matrix import MonomialMatrix
-from ._permutation import Permutation
-from ._polycyclic import PcGroup
-from ._transform import SABBlock, SABTransform
+from monsab._backend import (
+    MonomialMatrix,
+    Permutation,
+    PcGroup,
+    evaluate_word,
+    SABBlock,
+    SABTransform,
+    OrbitLifter,
+)
+from ._baum_clausen import BaumClausenStage, Representation, BaumClausenPaths, Word
 
 __all__ = [
     "MonomialMatrix",
     "Permutation",
     "PcGroup",
+    "evaluate_word",
+    "Word",
     "BaumClausenStage",
     "Representation",
     "SABTransform",
     "BaumClausenPaths",
     "SABBlock",
+    "OrbitLifter",
 ]

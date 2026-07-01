@@ -52,7 +52,7 @@ def test_sab_transform_s3():
 
 
 def test_transform_edge_cases():
-    from monsab.core._transform import SABTransform, SABBlock
+    from monsab.core import SABTransform, SABBlock
 
     empty_transform = SABTransform(blocks=(), N=0)
     assert empty_transform([]) == []

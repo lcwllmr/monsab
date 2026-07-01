@@ -1,5 +1,4 @@
-from monsab.core import PcGroup
-from monsab._backend import PyOrbitLifter
+from monsab.core import PcGroup, OrbitLifter
 
 
 def test_orbit_lifter_standard():
@@ -13,7 +12,7 @@ def test_orbit_lifter_standard():
         generators=[[1, 2, 0]],
     )
 
-    lifter = PyOrbitLifter(group, 2, False)  # D=2, standard monomial
+    lifter = OrbitLifter(group, 2, False)  # D=2, standard monomial
 
     # Monomials represented as indices
     m1 = [0, 1]
@@ -42,7 +41,7 @@ def test_orbit_lifter_squarefree():
         ],
     )
 
-    lifter = PyOrbitLifter(group, 3, True)  # D=3, squarefree
+    lifter = OrbitLifter(group, 3, True)  # D=3, squarefree
 
     m1 = [0, 1, 2]
     m2 = [0, 1, 3]  # Under first gen: [1, 0, 2] which is [0, 1, 2]

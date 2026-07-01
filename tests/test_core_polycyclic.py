@@ -15,11 +15,10 @@ def test_polycyclic_presentation():
 
 
 def test_polycyclic_edge_cases():
-    from monsab.core._polycyclic import _evaluate_word
-    from monsab.core import Permutation
+    from monsab.core import evaluate_word, Permutation
 
     gens = (Permutation((1, 0)),)
-    res = _evaluate_word(((0, 1),), gens)
+    res = evaluate_word(((0, 1),), gens)
     assert res == gens[0]
 
     desc = PcGroup(1, (2,), {}, {0: ((0, 1),)}, {})

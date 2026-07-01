@@ -1,8 +1,9 @@
 import numpy as np
 import numpy.typing
 import numpy
+import typing
 
-class RustSABBlock:
+class SABBlock:
     rep_id: int
     dim: int
     e: int
@@ -11,16 +12,54 @@ class RustSABBlock:
     valid_cols: np.ndarray
     j_values: np.ndarray
     l_values: np.ndarray
+    fs_indicator: int | None
+    orbit_reps: list[int] | None
+    d_k: int
 
-class RustSABTransform:
-    blocks: list[RustSABBlock]
+    def __init__(
+        self,
+        rep_id: int,
+        dim: int,
+        e: int,
+        orbit_reps_flat: list[int],
+        orbit_sizes: list[int],
+        valid_cols: list[int] | np.ndarray,
+        j_values: list[int] | np.ndarray,
+        l_values: list[int] | np.ndarray,
+        fs_indicator: int | None = None,
+        orbit_reps: typing.Any | None = None,
+        d_k: int = 0,
+    ) -> None: ...
+
+class SABTransform:
+    blocks: list[SABBlock]
     n_monomials: int
+    N: int
+    realize_skip_reps: set[int]
 
+    def __init__(
+        self,
+        blocks: list[SABBlock] | tuple[SABBlock, ...] | None = None,
+        N: int | None = None,
+        _rust_transform: typing.Any | None = None,
+        _realize_skip_reps: set[int] | None = None,
+    ) -> None: ...
+    def __call__(
+        self,
+        matrices: typing.Any,
+        reynolds: bool = False,
+        realize: bool = False,
+    ) -> list[list[typing.Any]]: ...
+    def explicit_basis(
+        self, sparse: bool = True, realize: bool = False
+    ) -> list[typing.Any]: ...
     def extract_batch(
         self,
         batch_data: list[np.ndarray],
         batch_indices: list[np.ndarray],
         batch_indptr: list[np.ndarray],
+        reynolds: bool = False,
+        realize: bool = False,
     ) -> list[list[tuple[np.ndarray, np.ndarray, np.ndarray, int]]]: ...
 
 def build_sab_blocks(
@@ -34,7 +73,7 @@ def build_sab_blocks(
     total_monomials: int,
     coset_actions: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
     coset_actions_inv: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
-) -> RustSABTransform: ...
+) -> SABTransform: ...
 def compute_fs_and_t_data(
     paths: dict[int, list[tuple[int, list[int], int]]],
     orbits: list[tuple[int, ...]],
@@ -46,6 +85,9 @@ def compute_fs_and_t_data(
 ) -> tuple[
     dict[int, int], dict[int, dict[tuple[int, ...], tuple[float, list[int]]]]
 ]: ...
+def evaluate_word(
+    word: list[tuple[int, int]], generators: list[Permutation]
+) -> Permutation: ...
 
 class PcGroup:
     number_of_generators: int
@@ -64,8 +106,14 @@ class PcGroup:
         conjugation_tails: dict[tuple[int, int], list[tuple[int, int]]],
         generators: list[list[int]],
     ) -> None: ...
+    def order(self) -> int: ...
+    def has_only_prime_factors(
+        self, primes: list[int] | set[int] | tuple[int, ...]
+    ) -> bool: ...
+    def is_normal_series(self) -> bool: ...
+    def verify(self) -> bool: ...
 
-class PyOrbitLifter:
+class OrbitLifter:
     def __init__(self, group: PcGroup, d: int, is_squarefree: bool) -> None: ...
     def clear_cache(self) -> None: ...
     def canonicalize(self, monomial: list[int]) -> list[int]: ...

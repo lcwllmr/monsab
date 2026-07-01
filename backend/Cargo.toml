@@ -12,5 +12,5 @@ fxhash = "0.2.1"
 ndarray = "0.17.2"
 num-complex = "0.4.6"
 numpy = "0.29.0"
-pyo3 = { version = "0.29", features = ["extension-module"] }
+pyo3 = { version = "0.29", features = ["extension-module", "experimental-inspect"] }
 rayon = "1.10.0"

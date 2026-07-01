@@ -10,8 +10,9 @@ from types import MappingProxyType
 
 from monsab.util import extract_roots
 
-from ._matrix import MonomialMatrix
-from ._polycyclic import PcGroup, Word
+from monsab._backend import MonomialMatrix, PcGroup
+
+type Word = tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True, slots=True)

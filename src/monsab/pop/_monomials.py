@@ -2,16 +2,16 @@
 Monomial spaces and generation.
 """
 
-from monsab.core._transform import SABTransform
-from monsab.core._baum_clausen import BaumClausenPaths
+from monsab.core import SABTransform, BaumClausenPaths
 from collections.abc import Mapping
 
 import math
+import operator
 from collections import deque
 import array
 
 from typing import TYPE_CHECKING
-from monsab.core._permutation import Permutation
+from monsab._backend import Permutation, OrbitLifter
 from monsab import _backend
 
 if TYPE_CHECKING:
@@ -297,16 +297,14 @@ class MonomialSpace:
 
     def get_orbit_reps_and_sizes(self, group: "PcGroup", d: int) -> dict[int, int]:
         """
-        Uses the fast PyOrbitLifter to evaluate the canonical orbit representative
+        Uses the fast OrbitLifter to evaluate the canonical orbit representative
         for every monomial up to degree d and returns a dictionary mapping rep_id to orbit_size.
         """
-        from monsab._backend import PyOrbitLifter
-
         if d > 4:
             raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
 
         self._ensure_d(d)
-        lifters = {k: PyOrbitLifter(group, k, False) for k in range(1, d + 1)}
+        lifters = {k: OrbitLifter(group, k, False) for k in range(1, d + 1)}
         rep_counts = {}
         for m in range(self.total_monomials(d)):
             tup = self.unrank_tuple(m)
@@ -397,8 +395,6 @@ def build_monomial_sab(
     Returns:
         SABTransform: A transform object that can evaluate the SAB basis.
     """
-    from monsab.core._transform import SABTransform
-
     is_squarefree = isinstance(space, SquarefreeMonomialSpace)
 
     g_inv_dict = {gen_id: list((~gen).data) for gen_id, gen in G_gens.items()}
@@ -410,10 +406,7 @@ def build_monomial_sab(
             new_entries.append((g_k, list(adm), lambda_i))
         paths_dict[rep_id] = new_entries
 
-    from collections import deque
-
     identity_data = tuple(range(len(g_inv_dict[next(iter(g_inv_dict))])))
-    import operator
 
     fs_indicators = {}
     v_matrices = {}  # to store v for real-type irreps
@@ -517,7 +510,7 @@ def build_monomial_sab(
             coset_reps_dict[rep_id] = reps_data
             coset_reps_inv_dict[rep_id] = reps_inv_data
 
-    rust_transform = _backend.build_sab_blocks(
+    sab_transform = _backend.build_sab_blocks(
         orbits,
         paths_dict,
         g_inv_dict,
@@ -531,10 +524,8 @@ def build_monomial_sab(
         coset_reps_dict if coset_reps is not None else None,
         coset_reps_inv_dict if coset_reps is not None else None,
     )
-
-    return SABTransform(
-        _rust_transform=rust_transform, _realize_skip_reps=realize_skip_reps
-    )
+    sab_transform.realize_skip_reps = realize_skip_reps
+    return sab_transform
 
 
 def _compute_orbit_chunk_squarefree(
@@ -812,16 +803,14 @@ class SquarefreeMonomialSpace:
 
     def get_orbit_reps_and_sizes(self, group: "PcGroup", d: int) -> dict[int, int]:
         """
-        Uses the fast PyOrbitLifter to evaluate the canonical orbit representative
+        Uses the fast OrbitLifter to evaluate the canonical orbit representative
         for every squarefree monomial and returns a dictionary mapping rep_id to orbit_size.
         """
-        from monsab._backend import PyOrbitLifter
-
         if d > 4:
             raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
 
         self._ensure_d(d)
-        lifters = {k: PyOrbitLifter(group, k, True) for k in range(1, d + 1)}
+        lifters = {k: OrbitLifter(group, k, True) for k in range(1, d + 1)}
         rep_counts = {}
         for m in range(self.total_monomials(d)):
             tup = self.unrank_tuple(m)

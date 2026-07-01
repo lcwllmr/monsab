@@ -31,8 +31,7 @@ def test_monomial_space_degree_4():
     tup = space.unrank_tuple(space.total_monomials(4) - 1)
     assert space.rank_tuple(tup) == space.total_monomials(4) - 1
 
-    from monsab.core._transform import SABTransform
-    from monsab.core import BaumClausenPaths
+    from monsab.core import SABTransform, BaumClausenPaths
     from monsab.pop._monomials import build_monomial_sab
 
     # Provide a dummy abstract BaumClausenPaths
@@ -71,8 +70,7 @@ def test_squarefree_monomial_space():
         nxt_tup = tuple(sorted(inv_data[v] for v in tup))
         assert space.rank_tuple(nxt_tup) == nxt_i
 
-    from monsab.core._transform import SABTransform
-    from monsab.core import BaumClausenPaths
+    from monsab.core import SABTransform, BaumClausenPaths
     from monsab.pop._monomials import build_monomial_sab
 
     # Provide a dummy abstract BaumClausenPaths

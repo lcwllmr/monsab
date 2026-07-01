@@ -6,13 +6,14 @@ This document outlines the general conventions and guidelines for all AI agents 
 
 * All Python library code must reside under `src/monsab/`.
 * **Rust Backend:** All performance-critical, zero-overhead routines must be implemented in Rust, located exclusively in the `backend/` directory.
-* **The Python/Rust Boundary:**
-* The Rust code is compiled into a hidden binary submodule named `monsab._backend`.
-* It must **not** contain any user-facing code and must **never** be exported or made visible in any public `__init__.py` files. It is strictly for internal package optimization.
-* A type stub file **`src/monsab/_backend.pyi`** must be kept exactly in sync with the exposed Rust `#[pymodule]` definitions to maintain type safety and autocompletion.
+* **The Python/Rust Boundary & Convenience Layer Architecture:**
+* The Rust code is compiled into a binary extension module named `monsab._backend`.
+* **Direct Exporting:** Performance-critical data structures and classes (e.g., `Permutation`, `MonomialMatrix`, `PcGroup`, `SABTransform`) must be implemented natively in Rust and exposed directly to Python via PyO3. Public submodules (e.g., `src/monsab/core/__init__.py`) should import and re-export these classes directly from `monsab._backend`.
+* **No Boilerplate Wrappers:** Do **not** create Python proxy classes or wrapper files whose sole purpose is storing a Rust handle and forwarding method calls. Python should be used strictly as a high-level convenience and orchestration layer (e.g., complex SciPy sparse matrix assembly, algorithm staging, or ecosystem integration).
+* **Automated Type Stubs:** A type stub file **`src/monsab/_backend.pyi`** must reflect all exposed Rust definitions. Whenever you modify bindings in `backend/src/lib.rs`, regenerate the stubs automatically by running `uv run maturin develop --bindings pyo3` and format the output with Ruff. Do not attempt to sync stubs manually.
 
 
-* **Python Submodules:** The library consists of Python submodules which each have their own directory under `src/monsab/` (e.g., `src/monsab/core/`). The respective `__init__.py` files expose the exact public API of that submodule. All actual Python code must be placed in separate logical hidden unit files starting with an underscore (e.g., `src/monsab/core/_matrix.py` contains a class exposed in `__init__.py` only).
+* **Python Submodules:** The library consists of Python submodules which each have their own directory under `src/monsab/` (e.g., `src/monsab/core/`). The respective `__init__.py` files expose the exact public API of that submodule. If an exported class is implemented entirely in Rust, do not create an empty or wrapper `_unit.py` file; re-export it directly in `__init__.py`. Underscore-prefixed Python files (e.g. `_baum_clausen.py`) should only be created for non-trivial Python algorithm implementations and helpers.
 * **Imports:**
 * Submodule-internal imports: `from ._<unit> import thing`
 * Cross-submodule imports: `from monsab.<submodule> import thing`
@@ -26,7 +27,7 @@ Because this project compiles a Rust extension via Maturin, unguided changes can
 
 1. **Isolate the Logic:** If a bug or feature is in the Rust code, write and run native Rust unit tests first (`uv run cargo test`). **Do not compile the Python extension or run `pytest` until the pure Rust tests pass.**
 2. **Minimize Python Boundary Rebuilds:** The Python extension only needs to be recompiled via `uv sync` when you modify the `#[pymodule]` bindings, change signatures crossing the boundary, or are ready to run the Python integration tests.
-3. **Keep Stubs Updated:** If you modify a function signature or add a function in `backend/src/lib.rs` that is exposed to Python, you **must** update `src/monsab/_backend.pyi` in the same step. Leaving them out of sync causes immediate type-checking failures.
+3. **Keep Stubs Updated:** If you modify a function signature or add a function in `backend/src/lib.rs` that is exposed to Python, regenerate `src/monsab/_backend.pyi` automatically by running `uv run maturin develop --bindings pyo3` and formatting with `uv run ruff format .`.
 
 ## Testing and Verification
 
@@ -68,12 +69,3 @@ All changes must be completely formatted and linted before declaring a task comp
 * **Consistency**: Use plain Markdown in docstrings.
 * **Placement**: Module docstrings must begin at the absolute top of the file. Class/function docstrings must follow standard Python placement.
 * **Content Requirements**: Public APIs must have full docstrings describing: purpose, parameters, return values, raised exceptions, and examples where helpful.
-
----
-
-### Key Decisions & Clarifications Needed
-
-Before you commit this file to your repository, let's nail down two specific architectural details to make the agent rules foolproof:
-
-1. **Automated Stub Generation vs. Manual Syncing:** Right now, the file dictates that agents must manually keep `_backend.pyi` in sync. Maturin can automatically generate these type stubs using `maturin develop --bindings pyo3 --strip`. Do you want to enforce a script or command for agents to generate this file automatically, or do you prefer them doing it manually to keep the file perfectly clean?
-2. **Project Name Inconsistency:** Your old file referred to the project as `symred` in the first paragraph, but all paths and coverage configurations point to `monsab`. I updated it to use `monsab` everywhere. Let me know if `symred` is an internal codename that needs to be preserved anywhere.

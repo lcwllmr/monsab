@@ -6,20 +6,20 @@
 #![allow(clippy::needless_return)]
 #![allow(clippy::type_complexity)]
 use num_complex::Complex64;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub mod action;
 pub mod matrix;
 pub mod pc;
 pub mod permutation;
 
-use action::PyOrbitLifter;
+use action::OrbitLifter;
 use matrix::MonomialMatrix;
-use pc::PcGroup;
+use pc::{evaluate_word, PcGroup};
 use permutation::Permutation;
 fn factorial(n: usize) -> f64 {
     (1..=n).map(|v| v as f64).product()
@@ -306,8 +306,8 @@ pub struct SABBlockOutput {
 }
 
 #[derive(Clone)]
-#[pyclass]
-pub struct RustSABBlock {
+#[pyclass(name = "SABBlock", module = "monsab._backend")]
+pub struct SABBlock {
     #[pyo3(get)]
     pub rep_id: usize,
     #[pyo3(get)]
@@ -334,9 +334,9 @@ pub struct RustSABBlock {
 }
 
 #[derive(Clone)]
-#[pyclass]
-pub struct RustSABTransform {
-    pub blocks: Vec<RustSABBlock>,
+#[pyclass(name = "SABTransform", module = "monsab._backend")]
+pub struct SABTransform {
+    pub blocks: Vec<SABBlock>,
     #[pyo3(get)]
     pub n_monomials: usize,
     pub n: usize,
@@ -345,13 +345,212 @@ pub struct RustSABTransform {
     pub binom_2: Vec<usize>,
     pub binom_3: Vec<usize>,
     pub is_squarefree: bool,
+    #[pyo3(get, set)]
+    pub realize_skip_reps: HashSet<usize>,
 }
 
 #[pymethods]
-impl RustSABTransform {
+impl SABTransform {
+    #[new]
+    #[pyo3(signature = (blocks=None, N=None, _rust_transform=None, _realize_skip_reps=None))]
+    #[allow(non_snake_case, clippy::too_many_arguments)]
+    pub fn new(
+        blocks: Option<Vec<SABBlock>>,
+        N: Option<usize>,
+        _rust_transform: Option<Bound<'_, PyAny>>,
+        _realize_skip_reps: Option<HashSet<usize>>,
+    ) -> Self {
+        Self {
+            blocks: blocks.unwrap_or_default(),
+            n_monomials: N.unwrap_or(0),
+            n: 0,
+            d: 0,
+            offsets: vec![],
+            binom_2: vec![],
+            binom_3: vec![],
+            is_squarefree: false,
+            realize_skip_reps: _realize_skip_reps.unwrap_or_default(),
+        }
+    }
+
     #[getter]
-    fn get_blocks(&self) -> Vec<RustSABBlock> {
+    fn get_blocks(&self) -> Vec<SABBlock> {
         self.blocks.clone()
+    }
+
+    #[getter]
+    #[allow(non_snake_case)]
+    fn N(&self) -> usize {
+        self.n_monomials
+    }
+
+    #[pyo3(signature = (matrices, reynolds=false, realize=false))]
+    fn __call__<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+        matrices: Bound<'py, PyAny>,
+        reynolds: bool,
+        realize: bool,
+    ) -> PyResult<Vec<Vec<Bound<'py, PyAny>>>> {
+        let mat_list: Vec<Bound<'py, PyAny>> = if matrices.is_instance_of::<pyo3::types::PyList>()
+            || matrices.is_instance_of::<pyo3::types::PyTuple>()
+        {
+            matrices.extract()?
+        } else {
+            vec![matrices]
+        };
+
+        if self.blocks.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut batch_data = Vec::with_capacity(mat_list.len());
+        let mut batch_indices = Vec::with_capacity(mat_list.len());
+        let mut batch_indptr = Vec::with_capacity(mat_list.len());
+
+        for m in &mat_list {
+            let data_obj = m.getattr("data")?;
+            let indices_obj = m.getattr("indices")?;
+            let indptr_obj = m.getattr("indptr")?;
+            let data_arr: numpy::PyReadonlyArray1<'py, f64> = data_obj.extract()?;
+            let indices_arr: numpy::PyReadonlyArray1<'py, i32> = indices_obj.extract()?;
+            let indptr_arr: numpy::PyReadonlyArray1<'py, i32> = indptr_obj.extract()?;
+            batch_data.push(data_arr);
+            batch_indices.push(indices_arr);
+            batch_indptr.push(indptr_arr);
+        }
+
+        let results = self.extract_batch(
+            py,
+            batch_data,
+            batch_indices,
+            batch_indptr,
+            reynolds,
+            realize,
+        )?;
+
+        let scipy_sparse = py.import("scipy.sparse")?;
+        let np_mod = py.import("numpy")?;
+        let float64_type = np_mod.getattr("float64")?;
+        let complex128_type = np_mod.getattr("complex128")?;
+        let coo_matrix = scipy_sparse.getattr("coo_matrix")?;
+        let csr_matrix = scipy_sparse.getattr("csr_matrix")?;
+
+        let mut final_blocks = Vec::with_capacity(self.blocks.len());
+        for (block, block_res) in self.blocks.iter().zip(results) {
+            if realize && self.realize_skip_reps.contains(&block.rep_id) {
+                continue;
+            }
+            let mut b_list = Vec::with_capacity(block_res.len());
+            for (data, rows, cols, m_k) in block_res {
+                if data.len()? == 0 {
+                    let dtype = if realize {
+                        &float64_type
+                    } else {
+                        &complex128_type
+                    };
+                    let shape = (m_k, m_k);
+                    let kwargs = pyo3::types::PyDict::new(py);
+                    kwargs.set_item("dtype", dtype)?;
+                    let mat = csr_matrix.call((shape,), Some(&kwargs))?;
+                    b_list.push(mat);
+                } else {
+                    let data_val: Bound<'py, PyAny> = if realize {
+                        let slice = data.readonly();
+                        let data_real: Vec<f64> = slice.as_slice()?.iter().map(|c| c.re).collect();
+                        data_real.into_pyarray(py).into_any()
+                    } else {
+                        data.into_any()
+                    };
+                    let rows_val = rows.into_any();
+                    let cols_val = cols.into_any();
+                    let coords = (rows_val, cols_val);
+                    let arg0 = (data_val, coords);
+                    let kwargs = pyo3::types::PyDict::new(py);
+                    kwargs.set_item("shape", (m_k, m_k))?;
+                    let mat = coo_matrix
+                        .call((arg0,), Some(&kwargs))?
+                        .getattr("tocsr")?
+                        .call0()?;
+                    b_list.push(mat);
+                }
+            }
+            final_blocks.push(b_list);
+        }
+        Ok(final_blocks)
+    }
+
+    #[pyo3(signature = (sparse=true, realize=false))]
+    fn explicit_basis<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+        sparse: bool,
+        realize: bool,
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        if realize {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Realization is not yet supported for explicit_basis.",
+            ));
+        }
+        if self.blocks.is_empty() {
+            return Ok(vec![]);
+        }
+        let n = self.n_monomials;
+        let mut matrices = Vec::with_capacity(self.blocks.len());
+
+        let scipy_sparse = if sparse {
+            Some(py.import("scipy.sparse")?)
+        } else {
+            None
+        };
+        let coo_matrix = scipy_sparse
+            .as_ref()
+            .map(|m| m.getattr("coo_matrix"))
+            .transpose()?;
+
+        for block in &self.blocks {
+            let m_k = block.dim;
+            let e = block.e;
+            let orbit_sizes = &block.orbit_sizes;
+            let valid_cols = &block.valid_cols;
+            let j_values = &block.j_values;
+            let l_values = &block.l_values;
+
+            if sparse {
+                let mut vals = Vec::with_capacity(valid_cols.len());
+                for (j, &ell) in j_values.iter().zip(l_values.iter()) {
+                    let angle = -2.0 * std::f64::consts::PI * (ell as f64) / (e as f64);
+                    let phase = num_complex::Complex64::new(angle.cos(), angle.sin());
+                    let val = phase / (orbit_sizes[*j as usize] as f64).sqrt();
+                    vals.push(val);
+                }
+                let vals_arr = vals.into_pyarray(py);
+                let valid_cols_arr = valid_cols.clone().into_pyarray(py);
+                let j_values_arr = j_values.clone().into_pyarray(py);
+                let coords = (valid_cols_arr, j_values_arr);
+                let arg0 = (vals_arr, coords);
+                let kwargs = pyo3::types::PyDict::new(py);
+                kwargs.set_item("shape", (n, m_k))?;
+                kwargs.set_item("dtype", py.import("numpy")?.getattr("complex128")?)?;
+                let coo = coo_matrix.as_ref().unwrap().call((arg0,), Some(&kwargs))?;
+                let csr = coo.getattr("tocsr")?.call0()?;
+                matrices.push(csr);
+            } else {
+                let mut u_k = ndarray::Array2::<num_complex::Complex64>::zeros((n, m_k));
+                for ((&v, &j), &ell) in valid_cols.iter().zip(j_values.iter()).zip(l_values.iter())
+                {
+                    if (v as usize) < n && (j as usize) < m_k {
+                        let angle = -2.0 * std::f64::consts::PI * (ell as f64) / (e as f64);
+                        let phase = num_complex::Complex64::new(angle.cos(), angle.sin());
+                        let val = phase / (orbit_sizes[j as usize] as f64).sqrt();
+                        u_k[[v as usize, j as usize]] = val;
+                    }
+                }
+                let py_arr = u_k.into_pyarray(py);
+                matrices.push(py_arr.into_any());
+            }
+        }
+        Ok(matrices)
     }
 
     #[allow(clippy::type_complexity)]
@@ -962,7 +1161,7 @@ fn build_sab_blocks(
     v_matrices: Bound<'_, pyo3::types::PyDict>,
     coset_reps: Option<std::collections::HashMap<usize, Vec<Vec<usize>>>>,
     coset_reps_inv: Option<std::collections::HashMap<usize, Vec<Vec<usize>>>>,
-) -> PyResult<RustSABTransform> {
+) -> PyResult<SABTransform> {
     let mut abstract_paths: HashMap<usize, Vec<(usize, Vec<(usize, usize)>, usize)>> =
         HashMap::new();
 
@@ -1231,7 +1430,7 @@ fn build_sab_blocks(
                     txj_cache = Some(cache);
                 }
 
-                merged_blocks.push(RustSABBlock {
+                merged_blocks.push(SABBlock {
                     rep_id: rep,
                     dim: current_dim,
                     e: current_e,
@@ -1386,7 +1585,7 @@ fn build_sab_blocks(
             txj_cache = Some(cache);
         }
 
-        merged_blocks.push(RustSABBlock {
+        merged_blocks.push(SABBlock {
             rep_id: rep,
             dim: current_dim,
             e: current_e,
@@ -1406,7 +1605,7 @@ fn build_sab_blocks(
         });
     }
 
-    Ok(RustSABTransform {
+    Ok(SABTransform {
         blocks: merged_blocks,
         n_monomials,
         n,
@@ -1415,10 +1614,11 @@ fn build_sab_blocks(
         binom_2,
         binom_3,
         is_squarefree,
+        realize_skip_reps: HashSet::new(),
     })
 }
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 fn hash_vec(v: &[usize]) -> u64 {
@@ -1580,18 +1780,61 @@ fn compute_fs_and_t_data(
 
 #[pymodule]
 fn _backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<RustSABTransform>()?;
+    m.add_class::<SABBlock>()?;
+    m.add_class::<SABTransform>()?;
     m.add_class::<PcGroup>()?;
-    m.add_class::<PyOrbitLifter>()?;
+    m.add_class::<OrbitLifter>()?;
     m.add_class::<Permutation>()?;
     m.add_class::<MonomialMatrix>()?;
     m.add_function(wrap_pyfunction!(build_sab_blocks, m)?)?;
     m.add_function(wrap_pyfunction!(compute_fs_and_t_data, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_word, m)?)?;
     Ok(())
 }
 
 #[pymethods]
-impl RustSABBlock {
+impl SABBlock {
+    #[new]
+    #[pyo3(signature = (rep_id, dim, e, orbit_reps_flat, orbit_sizes, valid_cols, j_values, l_values, fs_indicator=None, orbit_reps=None, d_k=0))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        rep_id: usize,
+        dim: usize,
+        e: usize,
+        orbit_reps_flat: Vec<usize>,
+        orbit_sizes: Vec<usize>,
+        valid_cols: Vec<u32>,
+        j_values: Vec<u32>,
+        l_values: Vec<u32>,
+        fs_indicator: Option<i32>,
+        orbit_reps: Option<Bound<'_, PyAny>>,
+        d_k: usize,
+    ) -> Self {
+        Self {
+            rep_id,
+            dim,
+            e,
+            orbit_reps_flat,
+            orbit_sizes,
+            valid_cols,
+            j_values,
+            l_values,
+            d_k,
+            coset_reps: None,
+            coset_reps_inv: None,
+            fs_indicator,
+            v_matrix_data: None,
+            txj_cache: None,
+            v_cols: None,
+            v_dagger_rows: None,
+        }
+    }
+
+    #[getter]
+    fn orbit_reps(&self) -> Vec<usize> {
+        vec![]
+    }
+
     #[getter]
     fn get_valid_cols<'py>(&self, py: pyo3::Python<'py>) -> pyo3::Bound<'py, numpy::PyArray1<u32>> {
         use numpy::IntoPyArray;
