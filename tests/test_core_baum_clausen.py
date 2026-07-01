@@ -1,7 +1,7 @@
 import pytest
 from monsab.core import (
     BaumClausenStage,
-    PolycyclicPresentation,
+    PcGroup,
 )
 from monsab.zoo import cyclic, abelian, dihedral, metacyclic
 
@@ -22,7 +22,7 @@ def test_dihedral_group():
     # We create a dummy presentation for D_10
     # Generators: g_1 (order 5), g_2 (order 2)
     # 1 is represented by an empty word ()
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=2,
         orders=(5, 2),
         power_tails={0: (), 1: ()},

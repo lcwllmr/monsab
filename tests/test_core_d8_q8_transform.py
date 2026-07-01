@@ -4,7 +4,7 @@ from monsab.core import (
     BaumClausenStage,
     BaumClausenPaths,
     Permutation,
-    PolycyclicPresentation,
+    PcGroup,
 )
 from monsab.pop import MonomialSpace, build_monomial_sab
 
@@ -86,7 +86,7 @@ def test_d8_q8_transform_quaternionic_block():
     conjugation_tails[(3, 4)] = ((0, 1),)
     conjugation_tails[(1, 2)] = ((0, 1),)
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=5,
         orders=(2, 2, 2, 2, 2),
         conjugation_exponents=conjugation_exponents,
@@ -149,9 +149,9 @@ def test_d8_q8_transform_quaternionic_block():
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
     concrete_generators = {1: g0, 2: g1, 3: g2, 4: g3, 5: g4}
-    space = MonomialSpace(32, 1)
+    space = MonomialSpace(32)
     orbits_space = [tuple(range(1, 33))]
-    transform = build_monomial_sab(paths, concrete_generators, orbits_space, space)
+    transform = build_monomial_sab(paths, concrete_generators, orbits_space, space, 1)
     explicit_matrices = transform.explicit_basis(sparse=False)
 
     rand_coeffs = np.random.randn(len(commutant_mats))

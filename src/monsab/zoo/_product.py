@@ -2,7 +2,7 @@
 Direct product constructions.
 """
 
-from monsab.core import PolycyclicPresentation
+from monsab.core import PcGroup
 
 from ._base import MonomialGroup, trivial
 
@@ -12,7 +12,7 @@ def direct_product(*factors: MonomialGroup) -> MonomialGroup:
     if not factors:
         return trivial()
 
-    # Combine the descriptions of the factors into a new PolycyclicPresentation
+    # Combine the descriptions of the factors into a new PcGroup
     combined_number_of_generators = 0
     combined_orders = []
     combined_conjugation_exponents = {}
@@ -37,7 +37,7 @@ def direct_product(*factors: MonomialGroup) -> MonomialGroup:
 
         offset += factor.description.number_of_generators
 
-    combined_description = PolycyclicPresentation(
+    combined_description = PcGroup(
         combined_number_of_generators,
         orders=tuple(combined_orders),
         conjugation_exponents=combined_conjugation_exponents,

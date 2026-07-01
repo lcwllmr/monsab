@@ -2,7 +2,7 @@ import numpy as np
 import scipy.sparse
 from monsab.core import (
     Permutation,
-    PolycyclicPresentation,
+    PcGroup,
     BaumClausenStage,
     BaumClausenPaths,
 )
@@ -19,7 +19,7 @@ def test_reynolds_extraction_equivalence():
     g2 = Permutation((3, 4, 5, 0, 1, 2))
     concrete_generators = {1: g1, 2: g2}
 
-    presentation = PolycyclicPresentation(2, (3, 2), {(0, 1): 2}, {}, {})
+    presentation = PcGroup(2, (3, 2), {(0, 1): 2}, {}, {})
 
     stages = [BaumClausenStage.trivial(6, presentation)]
     stages.append(BaumClausenStage.next_level(stages[-1], 1, 3))
@@ -27,7 +27,7 @@ def test_reynolds_extraction_equivalence():
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
 
-    space = MonomialSpace(6, 1)
+    space = MonomialSpace(6)
     orbits = [tuple(range(7))]
 
     s1 = Permutation((0, 1, 2, 3, 4, 5))
@@ -42,8 +42,10 @@ def test_reynolds_extraction_equivalence():
     ]
     coset_reps = {rep_id: all_g for rep_id in paths.paths.keys()}
 
-    build_monomial_sab(paths, concrete_generators, orbits, space, coset_reps=coset_reps)
-    transform_no_reps = build_monomial_sab(paths, concrete_generators, orbits, space)
+    build_monomial_sab(
+        paths, concrete_generators, orbits, space, 1, coset_reps=coset_reps
+    )
+    transform_no_reps = build_monomial_sab(paths, concrete_generators, orbits, space, 1)
 
     X1_dense = np.zeros((7, 7))
     X1_dense[1, 2] = 1.0
@@ -74,7 +76,7 @@ def test_reynolds_extraction_equivalence():
     # Re-build for H_k = C_3
     coset_reps_c3 = {rep_id: [s1, s2] for rep_id in paths.paths.keys()}
     transform_c3 = build_monomial_sab(
-        paths, concrete_generators, orbits, space, coset_reps=coset_reps_c3
+        paths, concrete_generators, orbits, space, 1, coset_reps=coset_reps_c3
     )
 
     for h in [s1, g1, Permutation(tuple(g1.data[g1.data[i]] for i in g1.data))]:

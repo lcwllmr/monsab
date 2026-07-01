@@ -4,7 +4,7 @@ from monsab.core import (
     BaumClausenStage,
     BaumClausenPaths,
     Permutation,
-    PolycyclicPresentation,
+    PcGroup,
 )
 from monsab.pop import MonomialSpace, build_monomial_sab
 
@@ -12,7 +12,7 @@ from monsab.pop import MonomialSpace, build_monomial_sab
 def test_real_transform_cyclic_group():
     conjugation_exponents = {}
     conjugation_tails = {}
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=1,
         orders=(3,),
         conjugation_exponents=conjugation_exponents,
@@ -27,9 +27,9 @@ def test_real_transform_cyclic_group():
         stages.append(BaumClausenStage.next_level(stages[-1], g_i=k, p=order))
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
-    space = MonomialSpace(3, 1)
+    space = MonomialSpace(3)
     orbits_space = [(0,), tuple(range(1, 4))]
-    transform = build_monomial_sab(paths, G_gens, orbits_space, space)
+    transform = build_monomial_sab(paths, G_gens, orbits_space, space, 1)
 
     # Construct a real symmetric matrix invariant under C3
     T_dense = np.array(
@@ -93,7 +93,7 @@ def test_real_transform_quaternionic():
     conjugation_exponents = {(0, 1): 3}
     conjugation_tails = {(0, 1): ()}
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=2,
         orders=(4, 2),
         conjugation_exponents=conjugation_exponents,
@@ -107,9 +107,9 @@ def test_real_transform_quaternionic():
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
     G_gens = {1: g1, 2: g2}
-    space = MonomialSpace(8, 1)
+    space = MonomialSpace(8)
     orbits_space = [(0,), tuple(range(1, 9))]
-    transform = build_monomial_sab(paths, G_gens, orbits_space, space)
+    transform = build_monomial_sab(paths, G_gens, orbits_space, space, 1)
 
     # Build a real symmetric invariant matrix
     # Averaging a random matrix

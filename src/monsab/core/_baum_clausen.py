@@ -11,7 +11,7 @@ from types import MappingProxyType
 from monsab.util import extract_roots
 
 from ._matrix import MonomialMatrix
-from ._polycyclic import PolycyclicPresentation, Word
+from ._polycyclic import PcGroup, Word
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +52,7 @@ class BaumClausenStage:
     def trivial(
         cls,
         e: int,
-        presentation: PolycyclicPresentation,
+        presentation: PcGroup,
     ) -> typing.Self:
         """Produce the level 0 object for the trivial subgroup."""
         trivial_rep = Representation(

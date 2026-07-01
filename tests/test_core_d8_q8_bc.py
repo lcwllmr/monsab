@@ -1,4 +1,4 @@
-from monsab.core import BaumClausenStage, PolycyclicPresentation
+from monsab.core import BaumClausenStage, PcGroup
 
 
 def test_baum_clausen_d8_q8():
@@ -16,7 +16,7 @@ def test_baum_clausen_d8_q8():
     # y^-1 x y = x z -> j=1(x), k=2(y)
     conjugation_tails[(1, 2)] = ((0, 1),)
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=5,
         orders=(2, 2, 2, 2, 2),
         conjugation_exponents=conjugation_exponents,

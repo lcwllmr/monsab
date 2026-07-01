@@ -35,3 +35,37 @@ def build_sab_blocks(
     coset_actions: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
     coset_actions_inv: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
 ) -> RustSABTransform: ...
+def compute_fs_and_t_data(
+    paths: dict[int, list[tuple[int, list[int], int]]],
+    orbits: list[tuple[int, ...]],
+    is_squarefree: bool,
+    n: int,
+    d: int,
+    coset_actions: dict[int, numpy.typing.NDArray[numpy.uint32]],
+    rep_types: dict[int, int],
+) -> tuple[
+    dict[int, int], dict[int, dict[tuple[int, ...], tuple[float, list[int]]]]
+]: ...
+
+class PcGroup:
+    number_of_generators: int
+    orders: list[int]
+    conjugation_exponents: dict[tuple[int, int], int]
+    power_tails: dict[int, list[tuple[int, int]]]
+    conjugation_tails: dict[tuple[int, int], list[tuple[int, int]]]
+    generators: list[list[int]]
+
+    def __init__(
+        self,
+        number_of_generators: int,
+        orders: list[int],
+        conjugation_exponents: dict[tuple[int, int], int],
+        power_tails: dict[int, list[tuple[int, int]]],
+        conjugation_tails: dict[tuple[int, int], list[tuple[int, int]]],
+        generators: list[list[int]],
+    ) -> None: ...
+
+class PyOrbitLifter:
+    def __init__(self, group: PcGroup, d: int, is_squarefree: bool) -> None: ...
+    def clear_cache(self) -> None: ...
+    def canonicalize(self, monomial: list[int]) -> list[int]: ...

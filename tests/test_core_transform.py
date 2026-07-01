@@ -3,7 +3,7 @@ import scipy.sparse
 import scipy.linalg
 from monsab.core import (
     BaumClausenStage,
-    PolycyclicPresentation,
+    PcGroup,
     Permutation,
     BaumClausenPaths,
 )
@@ -21,7 +21,7 @@ def test_sab_transform_s3():
         2: g2,
     }
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=2,
         orders=(3, 2),
         conjugation_exponents={(0, 1): 2},
@@ -38,9 +38,9 @@ def test_sab_transform_s3():
     stages.append(BaumClausenStage.next_level(stages[-1], 2, 2))  # g_2, p=2
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
-    space = MonomialSpace(3, 1)
+    space = MonomialSpace(3)
     orbits = [tuple(range(1, 4))]
-    transform = build_monomial_sab(paths, concrete_generators, orbits, space)
+    transform = build_monomial_sab(paths, concrete_generators, orbits, space, 1)
 
     assert len(transform.blocks) >= 2
 
@@ -105,7 +105,7 @@ def test_explicit_basis_orthogonality():
         2: g2,
     }
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=2,
         orders=(3, 2),
         conjugation_exponents={(0, 1): 2},
@@ -121,10 +121,10 @@ def test_explicit_basis_orthogonality():
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
 
-    space = MonomialSpace(3, 1)
+    space = MonomialSpace(3)
     orbits = [tuple(range(1, 4))]
 
-    transform = build_monomial_sab(paths, concrete_generators, orbits, space)
+    transform = build_monomial_sab(paths, concrete_generators, orbits, space, 1)
 
     # We test the explicit basis
     matrices = transform.explicit_basis(sparse=False)
@@ -158,7 +158,7 @@ def test_explicit_basis_dft_equivalence():
     g = Permutation((1, 2, 0))
     concrete_generators = {1: g}
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=1,
         orders=(3,),
         conjugation_exponents={},
@@ -173,10 +173,10 @@ def test_explicit_basis_dft_equivalence():
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
 
-    space = MonomialSpace(3, 1)
+    space = MonomialSpace(3)
     orbits = [tuple(range(1, 4))]
 
-    transform = build_monomial_sab(paths, concrete_generators, orbits, space)
+    transform = build_monomial_sab(paths, concrete_generators, orbits, space, 1)
     matrices = transform.explicit_basis(sparse=False)
 
     # The transform should give 3 blocks of dimension 1x1
@@ -235,7 +235,7 @@ def test_fast_transform_equivalence():
         2: g2,
     }
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=2,
         orders=(3, 2),
         conjugation_exponents={(0, 1): 2},
@@ -249,10 +249,10 @@ def test_fast_transform_equivalence():
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
 
-    space = MonomialSpace(3, 1)
+    space = MonomialSpace(3)
     orbits = [tuple(range(1, 4))]
 
-    transform = build_monomial_sab(paths, concrete_generators, orbits, space)
+    transform = build_monomial_sab(paths, concrete_generators, orbits, space, 1)
 
     # We generate a generic real symmetric commutant matrix T
     # S3 acting on 3 elements has a 2-dimensional commutant algebra:

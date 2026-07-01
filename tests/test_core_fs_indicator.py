@@ -2,7 +2,7 @@ from monsab.core import (
     BaumClausenStage,
     BaumClausenPaths,
     Permutation,
-    PolycyclicPresentation,
+    PcGroup,
 )
 from monsab.pop import MonomialSpace, build_monomial_sab
 
@@ -84,7 +84,7 @@ def test_d8_q8_fs_indicators():
     conjugation_tails[(3, 4)] = ((0, 1),)
     conjugation_tails[(1, 2)] = ((0, 1),)
 
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=5,
         orders=(2, 2, 2, 2, 2),
         conjugation_exponents=conjugation_exponents,
@@ -99,10 +99,10 @@ def test_d8_q8_fs_indicators():
     reps = stages[-1].representations
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
     concrete_generators = {1: g0, 2: g1, 3: g2, 4: g3, 5: g4}
-    space = MonomialSpace(32, 1)
+    space = MonomialSpace(32)
     orbits_space = [tuple(range(1, 33))]
 
-    transform = build_monomial_sab(paths, concrete_generators, orbits_space, space)
+    transform = build_monomial_sab(paths, concrete_generators, orbits_space, space, 1)
 
     fs = {}
     for b in transform.blocks:
@@ -135,7 +135,7 @@ def test_d8_q8_fs_indicators():
 def test_cyclic_group_complex_fs():
     conjugation_exponents = {}
     conjugation_tails = {}
-    presentation = PolycyclicPresentation(
+    presentation = PcGroup(
         number_of_generators=1,
         orders=(3,),
         conjugation_exponents=conjugation_exponents,
@@ -151,9 +151,9 @@ def test_cyclic_group_complex_fs():
         stages.append(BaumClausenStage.next_level(stages[-1], g_i=k, p=order))
 
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
-    space = MonomialSpace(3, 1)
+    space = MonomialSpace(3)
     orbits_space = [tuple(range(1, 4))]
-    transform = build_monomial_sab(paths, G_gens, orbits_space, space)
+    transform = build_monomial_sab(paths, G_gens, orbits_space, space, 1)
 
     fs = {}
     for b in transform.blocks:

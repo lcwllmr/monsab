@@ -2,7 +2,7 @@
 Abelian group constructions.
 """
 
-from monsab.core import PolycyclicPresentation
+from monsab.core import PcGroup
 
 from ._base import MonomialGroup, trivial
 from ._product import direct_product
@@ -15,7 +15,7 @@ def cyclic(order: int) -> MonomialGroup:
     if order == 1:
         return trivial()
     return MonomialGroup(
-        description=PolycyclicPresentation(
+        description=PcGroup(
             number_of_generators=1,
             orders=(order,),
             conjugation_exponents={},

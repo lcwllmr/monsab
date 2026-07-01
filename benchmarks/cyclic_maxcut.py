@@ -3,7 +3,7 @@ import time
 
 import cvxpy as cp
 
-from monsab.core import BaumClausenPaths, BaumClausenStage, Permutation
+from monsab.core import BaumClausenPaths, BaumClausenStage, PcGroup, Permutation
 from monsab.pop import SquarefreeMonomialSpace, build_monomial_sab
 from monsab.pop._lasserre import LasserreHierarchy
 from monsab.zoo import cyclic
@@ -33,12 +33,21 @@ def timed_step(name, func):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-n", "--vertices", type=int, required=True)
-    parser.add_argument("-t", "--degree", type=int, required=True)
+    parser.add_argument(
+        "-n",
+        "--vertices",
+        type=int,
+        required=True,
+        help="Number of vertices of cyclic graph",
+    )
+    parser.add_argument(
+        "-t", "--level", type=int, required=True, help="Hierarchy level"
+    )
+    parser.add_argument("--dont-solve", action="store_true", help="Skip SDP solve")
     args = parser.parse_args()
 
     n = args.vertices
-    t = args.degree
+    t = args.level
 
     print("=== Cyclic MaxCut (0-1) via Lasserre hierarcy ===")
     print(f"Vertices (n): {n}")
@@ -48,25 +57,34 @@ def main():
     grp = cyclic(n)
     perms = [Permutation(tuple((i + 1) % n for i in range(n)))]
     concrete_generators = {1: perms[0]}
+    grp_desc = PcGroup(
+        number_of_generators=grp.description.number_of_generators,
+        orders=grp.description.orders,
+        conjugation_exponents=grp.description.conjugation_exponents,
+        power_tails=grp.description.power_tails,
+        conjugation_tails=grp.description.conjugation_tails,
+        generators=[list(perms[0].data)],
+    )
 
-    stages = [BaumClausenStage.trivial(e=n, presentation=grp.description)]
+    stages = [BaumClausenStage.trivial(e=n, presentation=grp_desc)]
     nxt = BaumClausenStage.next_level(stages[-1], g_i=1, p=n)
     stages.append(nxt)
     paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
 
     # 2. Spaces
-    space2t = SquarefreeMonomialSpace(n, 2 * t)
-    space_t = SquarefreeMonomialSpace(n, t)
-    print(f"Monomial space 2t size: {space2t.total_monomials}")
-    print(f"Monomial space t size: {space_t.total_monomials}")
+    space = SquarefreeMonomialSpace(n)
+    N_2t = space.total_monomials(2 * t)
+    N_t = space.total_monomials(t)
+    print(f"Monomial space 2t size: {N_2t}")
+    print(f"Monomial space t size: {N_t}")
 
     orbits_2t = timed_step(
         "Build orbits for 2t",
-        lambda: space2t.get_full_orbits(concrete_generators, num_threads=1),
+        lambda: space.get_orbit_reps_and_sizes(grp_desc, 2 * t),
     )
-    orbits_t = timed_step(
+    orbits_t_full = timed_step(
         "Build orbits for t",
-        lambda: space_t.get_full_orbits(concrete_generators, num_threads=1),
+        lambda: space.get_full_orbits(concrete_generators, t),
     )
 
     # 3. SAB Transform
@@ -78,30 +96,28 @@ def main():
     transform = timed_step(
         "Initialize SAB transform",
         lambda: build_monomial_sab(
-            paths, concrete_generators, orbits_t, space_t, coset_reps=coset_reps
+            paths, concrete_generators, orbits_t_full, space, d=t, coset_reps=coset_reps
         ),
     )
 
     # 4. Generate Lasserre Matrices
-    lh = LasserreHierarchy(space2t, t, concrete_generators)
+    lh = LasserreHierarchy(space, t, concrete_generators)
 
+    orbits_2t_list = list(orbits_2t.items())
     rep_matrices = []
 
     def build_matrices():
-        for orb in orbits_2t:
-            mat = lh.moment_matrix(orb, reynolds=True)
+        for rep, _size in orbits_2t_list:
+            mat = lh.moment_matrix(rep)
             rep_matrices.append(mat)
 
     timed_step("Build representative matrices", build_matrices)
 
     # 5. Extract blocks
     def extract_blocks():
-        # Unscaled implicit Reynolds moment matrix
-        # blocks_by_rep = transform(rep_matrices, reynolds=True, realize=True)
-
         # Scaled to exactly match explicit orbit sum
         blocks_by_rep = [
-            [len(orbits_2t[i]) * b for i, b in enumerate(block_mats)]
+            [orbits_2t_list[i][1] * b for i, b in enumerate(block_mats)]
             for block_mats in transform(rep_matrices, reynolds=True, realize=True)
         ]
 
@@ -116,16 +132,26 @@ def main():
         y = cp.Variable(num_orbits)
         constraints = []
 
-        empty_rank = space2t.rank_tuple(())
-        empty_idx = next(i for i, orb in enumerate(orbits_2t) if orb[0] == empty_rank)
+        empty_rank = space.rank_tuple(())
+        empty_idx = next(
+            i for i, (rep, size) in enumerate(orbits_2t_list) if rep == empty_rank
+        )
         constraints.append(y[empty_idx] == 1)
 
-        x0_rank = space2t.rank_tuple((0,))
-        x0_idx = next(i for i, orb in enumerate(orbits_2t) if orb[0] == x0_rank)
+        x0_rank = space.rank_tuple((0,))
+        x0_idx = next(
+            i for i, (rep, size) in enumerate(orbits_2t_list) if rep == x0_rank
+        )
 
-        # Find edge {0, 1} orbit
-        edge_rank = space2t.rank_tuple((0, 1))
-        edge_idx = next(i for i, orb in enumerate(orbits_2t) if edge_rank in orb)
+        # Find edge {0, 1} orbit representative
+        # But wait! For cyclic group, the canonical rep for {i, j} is either {0, (j-i) % n} or {0, (i-j) % n}
+        edge_canonical = min((0, 1), (0, n - 1))
+        edge_canonical_rank = space.rank_tuple(edge_canonical)
+        edge_idx = next(
+            i
+            for i, (rep, size) in enumerate(orbits_2t_list)
+            if rep == edge_canonical_rank
+        )
 
         obj = cp.Maximize(n * (2 * y[x0_idx] - 2 * y[edge_idx]))
 
@@ -148,16 +174,40 @@ def main():
             constraints.append(sym_expr >> 0)
 
         prob = cp.Problem(obj, constraints)
+        return prob, obj, constraints
 
-        # Try CLARABEL first, which is more robust for SDPs
+    prob, obj, constraints = timed_step("Build SDP constraints", solve_sdp)
+
+    # Compute statistics
+    total_psd_size = 0
+    block_sizes = {}
+    for block_list in blocks_by_rep:
+        if block_list:
+            size = block_list[0].shape[0]
+            if size > 0:
+                total_psd_size += size
+                block_sizes[size] = block_sizes.get(size, 0) + 1
+
+    print("\n--- SDP Statistics ---")
+    print(f"Total PSD variable size: {total_psd_size}")
+    print(f"Number of constraints: {len(constraints)}")
+    print("Block size histogram:")
+    for size in sorted(block_sizes.keys()):
+        print(f"  {size}x{size}: {block_sizes[size]}")
+    print("----------------------")
+
+    if args.dont_solve:
+        print("\nSkipping solve as requested.")
+        return
+
+    def do_solve():
         try:
             prob.solve(solver=cp.CLARABEL, verbose=False)
         except Exception:
             prob.solve(solver=cp.SCS, verbose=False)
-
         return prob.value, prob.solver_stats
 
-    val, stats = timed_step("Solve SDP", solve_sdp)
+    val, stats = timed_step("Solve SDP", do_solve)
     print(f"\nSDP Value: {val:.6f}")
 
     # Exact cyclic maxcut solutions for small n are known:

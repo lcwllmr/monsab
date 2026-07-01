@@ -12,6 +12,11 @@ use rayon::prelude::*;
 use std::cmp;
 use std::collections::HashMap;
 
+pub mod action;
+pub mod pc;
+
+use action::PyOrbitLifter;
+use pc::PcGroup;
 fn factorial(n: usize) -> f64 {
     (1..=n).map(|v| v as f64).product()
 }
@@ -1572,6 +1577,8 @@ fn compute_fs_and_t_data(
 #[pymodule]
 fn _backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustSABTransform>()?;
+    m.add_class::<PcGroup>()?;
+    m.add_class::<PyOrbitLifter>()?;
     m.add_function(wrap_pyfunction!(build_sab_blocks, m)?)?;
     m.add_function(wrap_pyfunction!(compute_fs_and_t_data, m)?)?;
     Ok(())

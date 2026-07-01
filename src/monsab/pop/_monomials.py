@@ -10,14 +10,18 @@ import math
 from collections import deque
 import array
 
+from typing import TYPE_CHECKING
 from monsab.core._permutation import Permutation
 from monsab import _backend
 
+if TYPE_CHECKING:
+    from monsab.core import PcGroup
+
 
 def _compute_orbit_chunk(
-    args: tuple[int, int, tuple[tuple[int, ...], ...], MonomialSpace],
+    args: tuple[int, int, tuple[tuple[int, ...], ...], "MonomialSpace", int],
 ) -> bytes:
-    start, end, g_inv_data, space = args
+    start, end, g_inv_data, space, d = args
     n_gens = len(g_inv_data)
     res = array.array("i", [0] * ((end - start) * n_gens))
     idx = 0
@@ -28,7 +32,7 @@ def _compute_orbit_chunk(
 
     m = start
     while m < end:
-        if space.d >= 0 and m < offsets[1]:
+        if d >= 0 and m < offsets[1]:
             # k = 0
             for _ in g_inv_data:
                 res[idx] = 0
@@ -36,7 +40,7 @@ def _compute_orbit_chunk(
             m += 1
             continue
 
-        elif space.d >= 1 and m < offsets[2]:
+        elif d >= 1 and m < offsets[2]:
             # k = 1
             v0 = m - offsets[1]
             end_k = min(end, offsets[2])
@@ -48,7 +52,7 @@ def _compute_orbit_chunk(
             m = end_k
             continue
 
-        elif space.d >= 2 and m < offsets[3]:
+        elif d >= 2 and m < offsets[3]:
             # k = 2
             c1, c2_minus_1 = space.unrank_tuple(m)
             v = [c1, c2_minus_1]
@@ -70,7 +74,7 @@ def _compute_orbit_chunk(
             m = end_k
             continue
 
-        elif space.d >= 3 and m < offsets[4]:
+        elif d >= 3 and m < offsets[4]:
             # k = 3
             tup = space.unrank_tuple(m)
             v = list(tup)
@@ -116,27 +120,35 @@ class MonomialSpace:
     Uses O(1) memory via a mathematically dense Combinatorial Bijection, avoiding all tuple objects.
     """
 
-    def __init__(self, n: int, d: int):
+    def __init__(self, n: int):
         self.n = n
-        self.d = d
+        self.offsets = [
+            0,
+            1,
+        ]  # At least populated up to d=0 (k=0 gives offset 0, k=1 gives offset 1)
 
-        # Precompute offsets for each degree k
-        self.offsets = [0] * (d + 2)
-        total = 0
-        for k in range(d + 1):
-            self.offsets[k] = total
-            total += math.comb(n + k - 1, k)
-        self.offsets[d + 1] = total
-        self.total_monomials = total
-
-        # Precompute binomial lookup tables for extremely fast unranking
         self.binom_2 = tuple(math.comb(i, 2) for i in range(n + 3))
         self.binom_3 = tuple(math.comb(i, 3) for i in range(n + 3))
 
+    def _ensure_d(self, d: int) -> None:
+        if len(self.offsets) <= d + 1:
+            total = self.offsets[-1]
+            for k in range(len(self.offsets) - 1, d + 1):
+                total += math.comb(self.n + k - 1, k)
+                self.offsets.append(total)
+
+    def total_monomials(self, d: int) -> int:
+        self._ensure_d(d)
+        return self.offsets[d + 1]
+
     def unrank_tuple(self, m_id: int) -> tuple[int, ...]:
         """Convert an integer ID back to the sparse variable tuple."""
+        # Lazily ensure offsets array is large enough for the requested m_id
+        while m_id >= self.offsets[-1]:
+            self._ensure_d(len(self.offsets))
+
         k = 0
-        for i in range(self.d + 1):
+        for i in range(len(self.offsets) - 1):
             if self.offsets[i] <= m_id < self.offsets[i + 1]:
                 k = i
                 break
@@ -193,19 +205,20 @@ class MonomialSpace:
         k = len(tup)
         if k == 0:
             return 0
+        self._ensure_d(k)
         rank = sum(math.comb(tup[i] + i, i + 1) for i in range(k))
         return self.offsets[k] + rank
 
     def apply_gen(self, m_id: int, inv_data: tuple[int, ...]) -> int:
         """Apply a permutation strictly on the packed integer representation."""
-        if self.d >= 1 and m_id < self.offsets[2]:
+        if len(self.offsets) > 2 and m_id < self.offsets[2]:
             if m_id < self.offsets[1]:
                 return 0
             # k = 1
             v = m_id - self.offsets[1]
             return self.offsets[1] + inv_data[v]
 
-        elif self.d >= 2 and m_id < self.offsets[3]:
+        elif len(self.offsets) > 3 and m_id < self.offsets[3]:
             # k = 2
             rank = m_id - self.offsets[2]
             c2 = int((rank * 2.0) ** 0.5)
@@ -220,7 +233,7 @@ class MonomialSpace:
                 v0, v1 = v1, v0
             return self.offsets[2] + self.binom_2[v1 + 1] + v0
 
-        elif self.d >= 3 and m_id < self.offsets[4]:
+        elif len(self.offsets) > 4 and m_id < self.offsets[4]:
             # k = 3
             rank = m_id - self.offsets[3]
             c3 = int((rank * 6.0) ** 0.3333333333333333)
@@ -252,14 +265,18 @@ class MonomialSpace:
             new_tup = sorted(inv_data[v] for v in tup)
             return self.rank_tuple(tuple(new_tup))
 
-    def get_orbits(self, G_gens: dict[int, Permutation]) -> list[tuple[int, ...]]:
+    def get_orbits(
+        self, G_gens: dict[int, Permutation], d: int
+    ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns one representative per orbit."""
-        visited = bytearray(self.total_monomials)
+        self._ensure_d(d)
+        total_monomials = self.offsets[d + 1]
+        visited = bytearray(total_monomials)
         orbit_reps = []
 
         g_inv_data = [(~gen).data for gen in G_gens.values()]
 
-        for m in range(self.total_monomials):
+        for m in range(total_monomials):
             if visited[m]:
                 continue
 
@@ -278,11 +295,36 @@ class MonomialSpace:
 
         return orbit_reps
 
+    def get_orbit_reps_and_sizes(self, group: "PcGroup", d: int) -> dict[int, int]:
+        """
+        Uses the fast PyOrbitLifter to evaluate the canonical orbit representative
+        for every monomial up to degree d and returns a dictionary mapping rep_id to orbit_size.
+        """
+        from monsab._backend import PyOrbitLifter
+
+        if d > 4:
+            raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
+
+        self._ensure_d(d)
+        lifters = {k: PyOrbitLifter(group, k, False) for k in range(1, d + 1)}
+        rep_counts = {}
+        for m in range(self.total_monomials(d)):
+            tup = self.unrank_tuple(m)
+            if not tup:
+                canonical = ()
+            else:
+                canonical = lifters[len(tup)].canonicalize(list(tup))
+            rep_rank = self.rank_tuple(tuple(canonical))
+            rep_counts[rep_rank] = rep_counts.get(rep_rank, 0) + 1
+        return rep_counts
+
     def get_full_orbits(
-        self, G_gens: dict[int, Permutation], num_threads: int = 1
+        self, G_gens: dict[int, Permutation], d: int, num_threads: int = 1
     ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns a list of full orbits containing integer IDs."""
-        visited = bytearray(self.total_monomials)
+        self._ensure_d(d)
+        total_monomials = self.offsets[d + 1]
+        visited = bytearray(total_monomials)
         full_orbits = []
 
         g_inv_data = tuple((~gen).data for gen in G_gens.values())
@@ -291,11 +333,11 @@ class MonomialSpace:
         if num_threads > 1:
             from concurrent.futures import ProcessPoolExecutor
 
-            chunk_size = math.ceil(self.total_monomials / (num_threads * 4))
+            chunk_size = math.ceil(total_monomials / (num_threads * 4))
             chunks = []
-            for i in range(0, self.total_monomials, chunk_size):
+            for i in range(0, total_monomials, chunk_size):
                 chunks.append(
-                    (i, min(i + chunk_size, self.total_monomials), g_inv_data, self)
+                    (i, min(i + chunk_size, total_monomials), g_inv_data, self, d)
                 )
 
             edges = array.array("i")
@@ -303,12 +345,12 @@ class MonomialSpace:
                 for res_bytes in executor.map(_compute_orbit_chunk, chunks):
                     edges.frombytes(res_bytes)
         else:
-            chunk = (0, self.total_monomials, g_inv_data, self)
+            chunk = (0, total_monomials, g_inv_data, self, d)
             res_bytes = _compute_orbit_chunk(chunk)
             edges = array.array("i")
             edges.frombytes(res_bytes)
 
-        for m in range(self.total_monomials):
+        for m in range(total_monomials):
             if visited[m]:
                 continue
 
@@ -335,6 +377,7 @@ def build_monomial_sab(
     G_gens: Mapping[int, Permutation],
     orbits: list[tuple[int, ...]],
     space: "MonomialSpace | SquarefreeMonomialSpace",
+    d: int,
     num_threads: int = 1,
     coset_reps: dict[int, list[Permutation]] | None = None,
 ) -> SABTransform:
@@ -356,7 +399,6 @@ def build_monomial_sab(
     """
     from monsab.core._transform import SABTransform
 
-    d = space.d
     is_squarefree = isinstance(space, SquarefreeMonomialSpace)
 
     g_inv_dict = {gen_id: list((~gen).data) for gen_id, gen in G_gens.items()}
@@ -483,7 +525,7 @@ def build_monomial_sab(
         d,
         abstract.e,
         is_squarefree,
-        space.total_monomials,
+        space.total_monomials(d),
         fs_indicators,
         v_matrices,
         coset_reps_dict if coset_reps is not None else None,
@@ -496,9 +538,9 @@ def build_monomial_sab(
 
 
 def _compute_orbit_chunk_squarefree(
-    args: tuple[int, int, tuple[tuple[int, ...], ...], "SquarefreeMonomialSpace"],
+    args: tuple[int, int, tuple[tuple[int, ...], ...], "SquarefreeMonomialSpace", int],
 ) -> bytes:
-    start, end, g_inv_data, space = args
+    start, end, g_inv_data, space, d = args
     n_gens = len(g_inv_data)
     res = array.array("i", [0] * ((end - start) * n_gens))
     idx = 0
@@ -509,7 +551,7 @@ def _compute_orbit_chunk_squarefree(
 
     m = start
     while m < end:
-        if space.d >= 0 and m < offsets[1]:
+        if d >= 0 and m < offsets[1]:
             # k = 0
             for _ in g_inv_data:
                 res[idx] = 0
@@ -517,7 +559,7 @@ def _compute_orbit_chunk_squarefree(
             m += 1
             continue
 
-        elif space.d >= 1 and m < offsets[2]:
+        elif d >= 1 and m < offsets[2]:
             # k = 1
             v0 = m - offsets[1]
             end_k = min(end, offsets[2])
@@ -529,7 +571,7 @@ def _compute_orbit_chunk_squarefree(
             m = end_k
             continue
 
-        elif space.d >= 2 and m < offsets[3]:
+        elif d >= 2 and m < offsets[3]:
             # k = 2
             c1, c2 = space.unrank_tuple(m)
             v = [c1, c2]
@@ -551,7 +593,7 @@ def _compute_orbit_chunk_squarefree(
             m = end_k
             continue
 
-        elif space.d >= 3 and m < offsets[4]:
+        elif d >= 3 and m < offsets[4]:
             # k = 3
             tup = space.unrank_tuple(m)
             v = list(tup)
@@ -597,27 +639,32 @@ class SquarefreeMonomialSpace:
     Uses O(1) memory via a mathematically dense Combinatorial Bijection, avoiding all tuple objects.
     """
 
-    def __init__(self, n: int, d: int):
+    def __init__(self, n: int):
         self.n = n
-        self.d = min(d, n)
+        self.offsets = [0, 1]
 
-        # Precompute offsets for each degree k
-        self.offsets = [0] * (self.d + 2)
-        total = 0
-        for k in range(self.d + 1):
-            self.offsets[k] = total
-            total += math.comb(n, k)
-        self.offsets[self.d + 1] = total
-        self.total_monomials = total
+        self.binom_2 = tuple(math.comb(i, 2) for i in range(n + 3))
+        self.binom_3 = tuple(math.comb(i, 3) for i in range(n + 3))
 
-        # Precompute binomial lookup tables for extremely fast unranking
-        self.binom_2 = tuple(math.comb(i, 2) for i in range(n + 1))
-        self.binom_3 = tuple(math.comb(i, 3) for i in range(n + 1))
+    def _ensure_d(self, d: int) -> None:
+        if len(self.offsets) <= d + 1:
+            total = self.offsets[-1]
+            for k in range(len(self.offsets) - 1, d + 1):
+                total += math.comb(self.n, k)
+                self.offsets.append(total)
+
+    def total_monomials(self, d: int) -> int:
+        self._ensure_d(d)
+        return self.offsets[d + 1]
 
     def unrank_tuple(self, m_id: int) -> tuple[int, ...]:
         """Convert an integer ID back to the sparse variable tuple."""
+        # Lazily ensure offsets array is large enough for the requested m_id
+        while m_id >= self.offsets[-1]:
+            self._ensure_d(len(self.offsets))
+
         k = 0
-        for i in range(self.d + 1):
+        for i in range(len(self.offsets) - 1):
             if self.offsets[i] <= m_id < self.offsets[i + 1]:
                 k = i
                 break
@@ -674,19 +721,20 @@ class SquarefreeMonomialSpace:
         k = len(tup)
         if k == 0:
             return 0
+        self._ensure_d(k)
         rank = sum(math.comb(tup[i], i + 1) for i in range(k))
         return self.offsets[k] + rank
 
     def apply_gen(self, m_id: int, inv_data: tuple[int, ...]) -> int:
         """Apply a permutation strictly on the packed integer representation."""
-        if self.d >= 1 and m_id < self.offsets[2]:
+        if len(self.offsets) > 2 and m_id < self.offsets[2]:
             if m_id < self.offsets[1]:
                 return 0
             # k = 1
             v = m_id - self.offsets[1]
             return self.offsets[1] + inv_data[v]
 
-        elif self.d >= 2 and m_id < self.offsets[3]:
+        elif len(self.offsets) > 3 and m_id < self.offsets[3]:
             # k = 2
             rank = m_id - self.offsets[2]
             c2 = int((rank * 2.0) ** 0.5)
@@ -701,7 +749,7 @@ class SquarefreeMonomialSpace:
                 v0, v1 = v1, v0
             return self.offsets[2] + self.binom_2[v1] + v0
 
-        elif self.d >= 3 and m_id < self.offsets[4]:
+        elif len(self.offsets) > 4 and m_id < self.offsets[4]:
             # k = 3
             rank = m_id - self.offsets[3]
             c3 = int((rank * 6.0) ** 0.3333333333333333)
@@ -733,14 +781,18 @@ class SquarefreeMonomialSpace:
             new_tup = sorted(inv_data[v] for v in tup)
             return self.rank_tuple(tuple(new_tup))
 
-    def get_orbits(self, G_gens: dict[int, Permutation]) -> list[tuple[int, ...]]:
+    def get_orbits(
+        self, G_gens: dict[int, Permutation], d: int
+    ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns one representative per orbit."""
-        visited = bytearray(self.total_monomials)
+        self._ensure_d(d)
+        total_monomials = self.offsets[d + 1]
+        visited = bytearray(total_monomials)
         orbit_reps = []
 
         g_inv_data = [(~gen).data for gen in G_gens.values()]
 
-        for m in range(self.total_monomials):
+        for m in range(total_monomials):
             if visited[m]:
                 continue
 
@@ -758,11 +810,36 @@ class SquarefreeMonomialSpace:
 
         return orbit_reps
 
+    def get_orbit_reps_and_sizes(self, group: "PcGroup", d: int) -> dict[int, int]:
+        """
+        Uses the fast PyOrbitLifter to evaluate the canonical orbit representative
+        for every squarefree monomial and returns a dictionary mapping rep_id to orbit_size.
+        """
+        from monsab._backend import PyOrbitLifter
+
+        if d > 4:
+            raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
+
+        self._ensure_d(d)
+        lifters = {k: PyOrbitLifter(group, k, True) for k in range(1, d + 1)}
+        rep_counts = {}
+        for m in range(self.total_monomials(d)):
+            tup = self.unrank_tuple(m)
+            if not tup:
+                canonical = ()
+            else:
+                canonical = lifters[len(tup)].canonicalize(list(tup))
+            rep_rank = self.rank_tuple(tuple(canonical))
+            rep_counts[rep_rank] = rep_counts.get(rep_rank, 0) + 1
+        return rep_counts
+
     def get_full_orbits(
-        self, G_gens: dict[int, Permutation], num_threads: int = 1
+        self, G_gens: dict[int, Permutation], d: int, num_threads: int = 1
     ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns a list of full orbits containing integer IDs."""
-        visited = bytearray(self.total_monomials)
+        self._ensure_d(d)
+        total_monomials = self.offsets[d + 1]
+        visited = bytearray(total_monomials)
         full_orbits = []
 
         g_inv_data = tuple((~gen).data for gen in G_gens.values())
@@ -771,11 +848,11 @@ class SquarefreeMonomialSpace:
         if num_threads > 1:
             from concurrent.futures import ProcessPoolExecutor
 
-            chunk_size = math.ceil(self.total_monomials / (num_threads * 4))
+            chunk_size = math.ceil(total_monomials / (num_threads * 4))
             chunks = []
-            for i in range(0, self.total_monomials, chunk_size):
+            for i in range(0, total_monomials, chunk_size):
                 chunks.append(
-                    (i, min(i + chunk_size, self.total_monomials), g_inv_data, self)
+                    (i, min(i + chunk_size, total_monomials), g_inv_data, self, d)
                 )
 
             edges = array.array("i")
@@ -783,12 +860,12 @@ class SquarefreeMonomialSpace:
                 for res_bytes in executor.map(_compute_orbit_chunk_squarefree, chunks):
                     edges.frombytes(res_bytes)
         else:
-            chunk = (0, self.total_monomials, g_inv_data, self)
+            chunk = (0, total_monomials, g_inv_data, self, d)
             res_bytes = _compute_orbit_chunk_squarefree(chunk)
             edges = array.array("i")
             edges.frombytes(res_bytes)
 
-        for m in range(self.total_monomials):
+        for m in range(total_monomials):
             if visited[m]:
                 continue
 

@@ -8,6 +8,7 @@ name = "_backend"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+fxhash = "0.2.1"
 ndarray = "0.17.2"
 num-complex = "0.4.6"
 numpy = "0.29.0"

@@ -2,12 +2,10 @@
 Polycyclic presentations.
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-
 from monsab.util import is_prime
 
 from ._permutation import Permutation
+from monsab._backend import PcGroup as _PcGroup
 
 type Word = tuple[tuple[int, int], ...]
 
@@ -20,14 +18,7 @@ def _evaluate_word(word: Word, generators: tuple[Permutation, ...]) -> Permutati
     return result
 
 
-@dataclass(frozen=True, slots=True)
-class PolycyclicPresentation:
-    number_of_generators: int
-    orders: tuple[int, ...]
-    conjugation_exponents: Mapping[tuple[int, int], int]
-    power_tails: Mapping[int, Word]
-    conjugation_tails: Mapping[tuple[int, int], Word]
-
+class PcGroup(_PcGroup):
     def verify(self, generators: tuple[Permutation, ...]) -> bool:
         """
         Check whether the given generator permutations verify all relations of the presentation.

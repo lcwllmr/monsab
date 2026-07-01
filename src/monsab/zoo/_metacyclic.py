@@ -2,7 +2,7 @@
 Metacyclic group constructions.
 """
 
-from monsab.core import PolycyclicPresentation
+from monsab.core import PcGroup
 from monsab.util import is_prime, primitive_root
 
 from ._base import MonomialGroup
@@ -14,7 +14,7 @@ def metacyclic(p: int, q: int, r: int) -> MonomialGroup:
         raise ValueError("Parameters p, q, and r must be positive integers.")
 
     # The metacyclic group can be represented by two generators with specific relations
-    description = PolycyclicPresentation(
+    description = PcGroup(
         number_of_generators=2,
         orders=(p, q),
         conjugation_exponents={(0, 1): r},  # Conjugation relation: g1^-1 g0 g1 = g0^r
@@ -34,7 +34,7 @@ def dihedral(n: int) -> MonomialGroup:
         raise ValueError("Parameter n must be a positive integer.")
 
     # The dihedral group can be represented by two generators with specific relations
-    description = PolycyclicPresentation(
+    description = PcGroup(
         number_of_generators=2,
         orders=(n, 2),
         conjugation_exponents={
@@ -61,7 +61,7 @@ def affine_group_1d(p: int) -> MonomialGroup:
     # g1 must be the quotient (scaling, order p-1)
     g = primitive_root(p)
     g_inv = pow(g, -1, p)
-    description = PolycyclicPresentation(
+    description = PcGroup(
         number_of_generators=2,
         orders=(p, p - 1),
         conjugation_exponents={
