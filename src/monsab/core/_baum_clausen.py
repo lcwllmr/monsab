@@ -439,6 +439,7 @@ class BaumClausenPaths:
     paths: Mapping[int, tuple[tuple[int, tuple[tuple[int, int], ...], int], ...]]
     e: int
     conjugates: Mapping[int, int]
+    dims: Mapping[int, int] | None = None
 
     @classmethod
     def from_baum_clausen(
@@ -519,4 +520,5 @@ class BaumClausenPaths:
             for rep in final_stage.representations
             if rep.conjugate_ptr is not None
         }
-        return cls(paths=paths, e=e, conjugates=conjugates)
+        dims = {rep.id: rep.dim for rep in final_stage.representations}
+        return cls(paths=paths, e=e, conjugates=conjugates, dims=dims)

@@ -1,10 +1,10 @@
 use crate::monomial::{apply_permutation_arr, math_comb, unrank_tuple};
+use crate::representation::MonomialRepresentationBundle;
 use crate::transform::{SABBlock, SABBlockOutput, SABTransform};
 use num_complex::Complex64;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::collections::{HashMap, HashSet};
 
 pub fn dfs(
     n: usize,
@@ -325,45 +325,20 @@ pub fn dfs(
 
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (orbits_list, abstract_paths_dict, g_gens_dict, n, d, e, is_squarefree, n_monomials, fs_indicators, v_matrices, coset_reps=None, coset_reps_inv=None))]
+#[pyo3(signature = (orbits_list, bundle, g_gens_dict, n, d, is_squarefree, n_monomials, coset_reps=None, coset_reps_inv=None))]
 pub fn build_sab_blocks(
     orbits_list: Bound<'_, pyo3::types::PyList>,
-    abstract_paths_dict: Bound<'_, pyo3::types::PyDict>,
+    bundle: &MonomialRepresentationBundle,
     g_gens_dict: Bound<'_, pyo3::types::PyDict>,
     n: usize,
     d: usize,
-    e: usize,
     is_squarefree: bool,
     n_monomials: usize,
-    fs_indicators: Bound<'_, pyo3::types::PyDict>,
-    v_matrices: Bound<'_, pyo3::types::PyDict>,
     coset_reps: Option<HashMap<usize, Vec<Vec<usize>>>>,
     coset_reps_inv: Option<HashMap<usize, Vec<Vec<usize>>>>,
 ) -> PyResult<SABTransform> {
-    let mut abstract_paths: HashMap<usize, Vec<(usize, Vec<(usize, usize)>, usize)>> =
-        HashMap::new();
-
-    for (level_obj, paths_obj) in abstract_paths_dict.iter() {
-        let level: usize = level_obj.extract()?;
-        let mut paths_for_level = Vec::new();
-        let paths_list: Bound<'_, pyo3::types::PyList> = paths_obj.extract()?;
-        for item in paths_list.iter() {
-            let tuple: Bound<'_, pyo3::types::PyTuple> = item.extract()?;
-            let g_k: usize = tuple.get_item(0)?.extract()?;
-            let adm_list: Bound<'_, pyo3::types::PyList> = tuple.get_item(1)?.extract()?;
-            let mut adm = Vec::new();
-            for adm_item in adm_list.iter() {
-                let adm_tuple: Bound<'_, pyo3::types::PyTuple> = adm_item.extract()?;
-                adm.push((
-                    adm_tuple.get_item(0)?.extract()?,
-                    adm_tuple.get_item(1)?.extract()?,
-                ));
-            }
-            let lambda_i: usize = tuple.get_item(2)?.extract()?;
-            paths_for_level.push((g_k, adm, lambda_i));
-        }
-        abstract_paths.insert(level, paths_for_level);
-    }
+    let abstract_paths = &bundle.paths_dict;
+    let e = bundle.e;
 
     let mut orbit_data: Vec<Vec<usize>> = Vec::new();
     for v_obj in orbits_list.iter() {
@@ -453,7 +428,7 @@ pub fn build_sab_blocks(
                 e,
                 orbit,
                 &point_to_id,
-                &abstract_paths,
+                abstract_paths,
                 &gen_powers,
                 d,
                 &offsets,
@@ -497,16 +472,8 @@ pub fn build_sab_blocks(
                     1
                 };
 
-                let fs_ind = fs_indicators
-                    .get_item(rep)
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.extract::<i32>().ok());
-                let v_mat = v_matrices
-                    .get_item(rep)
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.extract::<Vec<usize>>().ok());
+                let fs_ind = bundle.fs_indicators.get(&rep).copied();
+                let v_mat = bundle.v_matrices.get(&rep).cloned();
 
                 let mut sorted_indices: Vec<usize> = (0..current_valid_cols.len()).collect();
                 sorted_indices.sort_unstable_by_key(|&i| current_valid_cols[i]);
@@ -651,16 +618,8 @@ pub fn build_sab_blocks(
         } else {
             1
         };
-        let fs_ind = fs_indicators
-            .get_item(rep)
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<i32>().ok());
-        let v_mat = v_matrices
-            .get_item(rep)
-            .ok()
-            .flatten()
-            .and_then(|v| v.extract::<Vec<usize>>().ok());
+        let fs_ind = bundle.fs_indicators.get(&rep).copied();
+        let v_mat = bundle.v_matrices.get(&rep).cloned();
 
         let mut sorted_indices: Vec<usize> = (0..current_valid_cols.len()).collect();
         sorted_indices.sort_unstable_by_key(|&i| current_valid_cols[i]);
@@ -773,163 +732,6 @@ pub fn build_sab_blocks(
         binom_2,
         binom_3,
         is_squarefree,
-        realize_skip_reps: HashSet::new(),
+        realize_skip_reps: bundle.realize_skip_reps.clone(),
     })
-}
-
-pub fn hash_vec(v: &[usize]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    v.hash(&mut hasher);
-    hasher.finish()
-}
-
-#[pyfunction]
-#[pyo3(signature = (g_gens, n, e, h_visited_all, h_gens_fwd_all, char_phases_rep_all))]
-pub fn compute_fs_and_t_data(
-    g_gens: Vec<Vec<usize>>,
-    n: usize,
-    e: usize,
-    h_visited_all: HashMap<usize, HashMap<Vec<usize>, usize>>,
-    h_gens_fwd_all: HashMap<usize, HashMap<usize, Vec<usize>>>,
-    char_phases_rep_all: HashMap<usize, HashMap<usize, usize>>,
-) -> PyResult<(HashMap<usize, i32>, HashMap<usize, Option<Vec<usize>>>)> {
-    let mut fs_indicators = HashMap::new();
-    let mut needs_t_data = HashSet::new();
-
-    let mut nu2_complex_all = HashMap::new();
-    for &rep_id in h_visited_all.keys() {
-        nu2_complex_all.insert(rep_id, Complex64::new(0.0, 0.0));
-    }
-
-    if !h_visited_all.is_empty() {
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-        let identity: Vec<usize> = (0..n).collect();
-        visited.insert(hash_vec(&identity));
-        queue.push_back(identity);
-
-        while let Some(curr) = queue.pop_front() {
-            let mut y2 = vec![0; n];
-            for i in 0..n {
-                y2[i] = curr[curr[i]];
-            }
-
-            for (rep_id, h_visited) in &h_visited_all {
-                if let Some(&phase) = h_visited.get(&y2) {
-                    let angle = 2.0 * std::f64::consts::PI * (phase as f64) / (e as f64);
-                    let chi_h = Complex64::new(angle.cos(), angle.sin());
-                    *nu2_complex_all.get_mut(rep_id).unwrap() += chi_h;
-                }
-            }
-
-            for gen in &g_gens {
-                let mut nxt = vec![0; n];
-                for i in 0..n {
-                    nxt[i] = curr[gen[i]];
-                }
-                if visited.insert(hash_vec(&nxt)) {
-                    queue.push_back(nxt);
-                }
-            }
-        }
-    }
-
-    for (rep_id, h_visited) in &h_visited_all {
-        let nu2_complex = nu2_complex_all[rep_id];
-        let h_len = h_visited.len() as f64;
-        let nu2 = (nu2_complex.re / h_len).round() as i32;
-        fs_indicators.insert(*rep_id, nu2);
-
-        let mut is_complex_chi = false;
-        for &p in h_visited.values() {
-            if p != 0 && p * 2 != e {
-                is_complex_chi = true;
-                break;
-            }
-        }
-
-        if nu2 == 1 && is_complex_chi {
-            needs_t_data.insert(*rep_id);
-        }
-    }
-
-    let mut found_t_data = HashMap::new();
-    for &rep_id in &needs_t_data {
-        found_t_data.insert(rep_id, None);
-    }
-
-    if !needs_t_data.is_empty() {
-        let mut visited_t = HashSet::new();
-        let mut queue_t = VecDeque::new();
-        let identity: Vec<usize> = (0..n).collect();
-        visited_t.insert(hash_vec(&identity));
-        queue_t.push_back(identity);
-
-        while let Some(y) = queue_t.pop_front() {
-            let mut reps_to_remove = Vec::new();
-
-            for &rep_id in &needs_t_data {
-                let h_visited = &h_visited_all[&rep_id];
-                if h_visited.contains_key(&y) {
-                    continue;
-                }
-
-                let mut conjugates = true;
-                let h_gens_fwd = &h_gens_fwd_all[&rep_id];
-                let char_phases = &char_phases_rep_all[&rep_id];
-
-                for (g_k, h) in h_gens_fwd {
-                    let phase = char_phases[g_k];
-                    let mut hy = vec![0; n];
-                    for i in 0..n {
-                        hy[i] = y[h[i]];
-                    }
-                    let mut y_inv = vec![0; n];
-                    for i in 0..n {
-                        y_inv[y[i]] = i;
-                    }
-                    let mut y_inv_h_y = vec![0; n];
-                    for i in 0..n {
-                        y_inv_h_y[i] = y_inv[hy[i]];
-                    }
-
-                    let target_phase = (e - phase) % e;
-                    if let Some(&p) = h_visited.get(&y_inv_h_y) {
-                        if p != target_phase {
-                            conjugates = false;
-                            break;
-                        }
-                    } else {
-                        conjugates = false;
-                        break;
-                    }
-                }
-
-                if conjugates {
-                    found_t_data.insert(rep_id, Some(y.clone()));
-                    reps_to_remove.push(rep_id);
-                }
-            }
-
-            for rep_id in reps_to_remove {
-                needs_t_data.remove(&rep_id);
-            }
-
-            if needs_t_data.is_empty() {
-                break;
-            }
-
-            for gen in &g_gens {
-                let mut nxt = vec![0; n];
-                for i in 0..n {
-                    nxt[i] = y[gen[i]];
-                }
-                if visited_t.insert(hash_vec(&nxt)) {
-                    queue_t.push_back(nxt);
-                }
-            }
-        }
-    }
-
-    Ok((fs_indicators, found_t_data))
 }

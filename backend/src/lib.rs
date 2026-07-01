@@ -14,13 +14,15 @@ pub mod matrix;
 pub mod monomial;
 pub mod pc;
 pub mod permutation;
+pub mod representation;
 pub mod transform;
 
 use action::OrbitLifter;
-use builder::{build_sab_blocks, compute_fs_and_t_data};
+use builder::build_sab_blocks;
 use matrix::MonomialMatrix;
 use pc::{evaluate_word, PcGroup};
 use permutation::Permutation;
+use representation::{compute_fs_and_t_data, MonomialRepresentation, MonomialRepresentationBundle};
 use transform::{SABBlock, SABTransform};
 
 #[pymodule]
@@ -31,6 +33,8 @@ fn _backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<OrbitLifter>()?;
     m.add_class::<Permutation>()?;
     m.add_class::<MonomialMatrix>()?;
+    m.add_class::<MonomialRepresentation>()?;
+    m.add_class::<MonomialRepresentationBundle>()?;
     m.add_function(wrap_pyfunction!(build_sab_blocks, m)?)?;
     m.add_function(wrap_pyfunction!(compute_fs_and_t_data, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_word, m)?)?;

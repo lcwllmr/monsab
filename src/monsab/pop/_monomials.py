@@ -2,11 +2,15 @@
 Monomial spaces and generation.
 """
 
-from monsab.core import SABTransform, BaumClausenPaths
+from monsab.core import (
+    SABTransform,
+    BaumClausenPaths,
+    MonomialRepresentationBundle,
+    analyze_monomial_representations,
+)
 from collections.abc import Mapping
 
 import math
-import operator
 from collections import deque
 import array
 
@@ -371,7 +375,7 @@ class MonomialSpace:
 
 
 def build_monomial_sab(
-    abstract: BaumClausenPaths,
+    abstract: BaumClausenPaths | MonomialRepresentationBundle,
     G_gens: Mapping[int, Permutation],
     orbits: list[tuple[int, ...]],
     space: "MonomialSpace | SquarefreeMonomialSpace",
@@ -383,7 +387,8 @@ def build_monomial_sab(
     Build a Fast SAB Transform for a given space of monomials.
 
     Args:
-        abstract: The abstract Baum-Clausen paths defining the irreducible representations.
+        abstract: The abstract Baum-Clausen paths or an analyzed `MonomialRepresentationBundle`
+            defining the irreducible representations.
         G_gens: The generators of the group $G$, mapping generator IDs to `Permutation` objects.
         orbits: A list of $G$-orbits of monomials, where each orbit is a tuple of monomial IDs.
         space: The monomial space (`MonomialSpace` or `SquarefreeMonomialSpace`) defining the action.
@@ -397,106 +402,12 @@ def build_monomial_sab(
     """
     is_squarefree = isinstance(space, SquarefreeMonomialSpace)
 
+    if isinstance(abstract, MonomialRepresentationBundle):
+        bundle = abstract
+    else:
+        bundle = analyze_monomial_representations(abstract, G_gens, space.n)
+
     g_inv_dict = {gen_id: list((~gen).data) for gen_id, gen in G_gens.items()}
-
-    paths_dict = {}
-    for rep_id, path_entries in abstract.paths.items():
-        new_entries = []
-        for g_k, adm, lambda_i in path_entries:
-            new_entries.append((g_k, list(adm), lambda_i))
-        paths_dict[rep_id] = new_entries
-
-    identity_data = tuple(range(len(g_inv_dict[next(iter(g_inv_dict))])))
-
-    fs_indicators = {}
-    v_matrices = {}  # to store v for real-type irreps
-
-    H_visited_all = {}
-    is_complex_chi_all = {}
-    H_gens_all = {}
-    for rep_id, paths in abstract.paths.items():
-        if abstract.conjugates.get(rep_id, rep_id) != rep_id:
-            fs_indicators[rep_id] = 0
-            continue
-
-        is_1d = all(g_k != 0 for g_k, _, _ in paths)
-        if is_1d:
-            # 1D reps that are self-conjugate are real-valued.
-            fs_indicators[rep_id] = 1
-            is_complex_chi_all[rep_id] = False
-            continue
-
-        H_gens = {}
-        H_gens_fwd = {}
-        char_phases_rep = {}
-        for g_k, t_word, lambda_i in paths:
-            if g_k != 0:
-                H_gens[g_k] = g_inv_dict[g_k]
-
-                inv_data = g_inv_dict[g_k]
-                fwd_data = [0] * len(inv_data)
-                for i, v in enumerate(inv_data):
-                    fwd_data[v] = i
-                H_gens_fwd[g_k] = tuple(fwd_data)
-
-                char_phases_rep[g_k] = lambda_i
-
-        H_gens_all[rep_id] = (H_gens_fwd, char_phases_rep)
-
-        H_visited = {identity_data: 0}
-        H_queue = deque([identity_data])
-        H_gens_ig = {
-            g_k: operator.itemgetter(*g_data) for g_k, g_data in H_gens.items()
-        }
-
-        while H_queue:
-            curr = H_queue.popleft()
-            curr_phase = H_visited[curr]
-
-            for g_k, ig in H_gens_ig.items():
-                nxt = ig(curr)
-                if nxt not in H_visited:
-                    nxt_phase = (curr_phase + char_phases_rep[g_k]) % abstract.e
-                    H_visited[nxt] = nxt_phase
-                    H_queue.append(nxt)
-
-        H_visited_all[rep_id] = H_visited
-
-        is_complex_chi = False
-        for p in H_visited.values():
-            if p != 0 and p * 2 != abstract.e:
-                is_complex_chi = True
-                break
-        is_complex_chi_all[rep_id] = is_complex_chi
-
-    g_gens_data = [list(g.data) for g in G_gens.values()]
-    rust_fs, v_matrices = _backend.compute_fs_and_t_data(
-        g_gens_data,
-        space.n,
-        abstract.e,
-        H_visited_all,
-        {rep_id: H_gens_all[rep_id][0] for rep_id in H_gens_all},
-        {rep_id: H_gens_all[rep_id][1] for rep_id in H_gens_all},
-    )
-    fs_indicators.update(rust_fs)
-
-    # Optional: Python creates the v_matrices dict missing keys where t_data is None.
-    # We should unpack v_matrices which might have None values.
-    v_matrices = {k: v for k, v in v_matrices.items() if v is not None}
-
-    for rep_id in H_visited_all.keys():
-        if rep_id not in fs_indicators:
-            # Fallback (handled in Rust, but just in case)
-            pass
-
-    realize_skip_reps = set()
-    matched = set()
-    for r1, nu2 in fs_indicators.items():
-        if nu2 == 0 and r1 not in matched:
-            r2 = abstract.conjugates.get(r1, r1)
-            matched.add(r1)
-            matched.add(r2)
-            realize_skip_reps.add(max(r1, r2))
 
     coset_reps_dict = {}
     coset_reps_inv_dict = {}
@@ -510,22 +421,17 @@ def build_monomial_sab(
             coset_reps_dict[rep_id] = reps_data
             coset_reps_inv_dict[rep_id] = reps_inv_data
 
-    sab_transform = _backend.build_sab_blocks(
+    return _backend.build_sab_blocks(
         orbits,
-        paths_dict,
+        bundle,
         g_inv_dict,
         space.n,
         d,
-        abstract.e,
         is_squarefree,
         space.total_monomials(d),
-        fs_indicators,
-        v_matrices,
         coset_reps_dict if coset_reps is not None else None,
         coset_reps_inv_dict if coset_reps is not None else None,
     )
-    sab_transform.realize_skip_reps = realize_skip_reps
-    return sab_transform
 
 
 def _compute_orbit_chunk_squarefree(

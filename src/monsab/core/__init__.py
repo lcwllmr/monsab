@@ -12,6 +12,11 @@ from monsab._backend import (
     OrbitLifter,
 )
 from ._baum_clausen import BaumClausenStage, Representation, BaumClausenPaths, Word
+from ._representation import (
+    MonomialRepresentation,
+    MonomialRepresentationBundle,
+    analyze_monomial_representations,
+)
 
 __all__ = [
     "MonomialMatrix",
@@ -25,4 +30,7 @@ __all__ = [
     "BaumClausenPaths",
     "SABBlock",
     "OrbitLifter",
+    "MonomialRepresentation",
+    "MonomialRepresentationBundle",
+    "analyze_monomial_representations",
 ]

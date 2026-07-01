@@ -64,27 +64,23 @@ class SABTransform:
 
 def build_sab_blocks(
     orbits: list[tuple[int, ...]],
-    paths: dict[int, list[tuple[int, list[int], int]]],
+    bundle: MonomialRepresentationBundle,
     g_inv_data: dict[int, list[int]],
     n: int,
     d: int,
-    e: int,
     is_squarefree: bool,
     total_monomials: int,
     coset_actions: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
     coset_actions_inv: dict[int, numpy.typing.NDArray[numpy.uint32]] | None = None,
 ) -> SABTransform: ...
 def compute_fs_and_t_data(
-    paths: dict[int, list[tuple[int, list[int], int]]],
-    orbits: list[tuple[int, ...]],
-    is_squarefree: bool,
+    g_gens: list[list[int]],
     n: int,
-    d: int,
-    coset_actions: dict[int, numpy.typing.NDArray[numpy.uint32]],
-    rep_types: dict[int, int],
-) -> tuple[
-    dict[int, int], dict[int, dict[tuple[int, ...], tuple[float, list[int]]]]
-]: ...
+    e: int,
+    h_visited_all: dict[int, dict[tuple[int, ...], int]],
+    h_gens_fwd_all: dict[int, dict[int, list[int]]],
+    char_phases_rep_all: dict[int, dict[int, int]],
+) -> tuple[dict[int, int], dict[int, list[int] | None]]: ...
 def evaluate_word(
     word: list[tuple[int, int]], generators: list[Permutation]
 ) -> Permutation: ...
@@ -117,6 +113,42 @@ class OrbitLifter:
     def __init__(self, group: PcGroup, d: int, is_squarefree: bool) -> None: ...
     def clear_cache(self) -> None: ...
     def canonicalize(self, monomial: list[int]) -> list[int]: ...
+
+class MonomialRepresentation:
+    id: int
+    dim: int
+    e: int
+    conjugate_id: int
+    fs_indicator: int | None
+    v_matrix: list[int] | None
+
+    def __init__(
+        self,
+        id: int,
+        dim: int,
+        e: int,
+        conjugate_id: int,
+        fs_indicator: int | None = None,
+        v_matrix: list[int] | None = None,
+    ) -> None: ...
+
+class MonomialRepresentationBundle:
+    representations: list[MonomialRepresentation]
+    paths_dict: dict[int, list[tuple[int, list[tuple[int, int]], int]]]
+    fs_indicators: dict[int, int]
+    v_matrices: dict[int, list[int]]
+    realize_skip_reps: set[int]
+    e: int
+
+    def __init__(
+        self,
+        representations: list[MonomialRepresentation],
+        paths_dict: dict[int, list[tuple[int, list[tuple[int, int]], int]]],
+        fs_indicators: dict[int, int],
+        v_matrices: dict[int, list[int]],
+        realize_skip_reps: set[int],
+        e: int,
+    ) -> None: ...
 
 class Permutation:
     def __init__(self, data: list[int] | tuple[int, ...]) -> None: ...
