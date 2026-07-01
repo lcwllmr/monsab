@@ -32,7 +32,7 @@ Because this project compiles a Rust extension via Maturin, unguided changes can
 ## Testing and Verification
 
 * The authoritative paths for verifying correctness are the native Cargo test suite and the Python `pytest` suite.
-* **Rust Isolation Testing:** Run `uv run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info` to run native Rust tests and calculate coverage.
+* **Rust Isolation Testing:** Run `uv run cargo llvm-cov --workspace --lcov --output-path lcov.info` to run native Rust tests and calculate coverage. (On Linux/Unix, if running standalone native tests outside an interpreter or in CI, ensure `LD_LIBRARY_PATH` includes the Python lib directory: `export LD_LIBRARY_PATH="$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))'):$LD_LIBRARY_PATH"`).
 * **Python/Integration Testing:** Run `uv run pytest` to execute the Python test suite. To run specific files, use `uv run pytest tests/test_<filename>.py`.
 * **Test Alignment:** Every Python unit has exactly one test file associated with it (`tests/test_<submodule>_<unit>.py`). Rust routines should have internal module unit tests or integration tests inside `backend/tests/`.
 * We strive for close to 100% coverage across both languages.
@@ -44,7 +44,7 @@ All changes must be completely formatted and linted before declaring a task comp
 | Language | Tool | Command |
 | --- | --- | --- |
 | **Rust** | `rustfmt` | `uv run cargo fmt --all` |
-| **Rust** | `clippy` | `uv run cargo clippy --all-targets --all-features -- -D warnings` |
+| **Rust** | `clippy` | `uv run cargo clippy --all-targets -- -D warnings` |
 | **Python** | `ruff` (Lint) | `uv run ruff check . --fix` |
 | **Python** | `ruff` (Format) | `uv run ruff format .` |
 

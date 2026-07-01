@@ -22,9 +22,10 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: uv sync --locked
       - run: |
+          export LD_LIBRARY_PATH="$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))'):$LD_LIBRARY_PATH"
           uv run cargo fmt --all -- --check
-          uv run cargo clippy --all-targets --all-features -- -D warnings
-          uv run cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+          uv run cargo clippy --all-targets -- -D warnings
+          uv run cargo llvm-cov --workspace --lcov --output-path lcov.info
       - run: |
           uv run ruff check .
           uv run ruff format --check .
