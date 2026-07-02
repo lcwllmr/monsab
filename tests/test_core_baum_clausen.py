@@ -7,7 +7,7 @@ from monsab.zoo import cyclic, abelian, dihedral, metacyclic
 
 
 def run_baum_clausen(grp, e):
-    presentation = grp.description
+    presentation = grp
     stage = BaumClausenStage.trivial(e=e, presentation=presentation)
     for k, order in enumerate(presentation.orders, start=1):
         stage = BaumClausenStage.next_level(stage, g_i=k, p=order)
@@ -104,7 +104,7 @@ def test_baum_clausen_s3_z2():
 
     grp = direct_product(dihedral(3), cyclic(2))
     e = 6
-    stages = [BaumClausenStage.trivial(e, grp.description)]
+    stages = [BaumClausenStage.trivial(e, grp)]
     stages.append(BaumClausenStage.next_level(stages[-1], 1, 3))
     stages.append(BaumClausenStage.next_level(stages[-1], 2, 2))
     stages.append(BaumClausenStage.next_level(stages[-1], 3, 2))

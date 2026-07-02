@@ -10,15 +10,11 @@ from typing import Any, Callable
 import numpy as np
 import scipy.sparse
 
-from monsab.core import (
-    BaumClausenPaths,
-    BaumClausenStage,
-    Permutation,
-)
-from monsab.pop import (
+from monsab import (
     MonomialSpace,
+    Permutation,
     SquarefreeMonomialSpace,
-    build_monomial_sab,
+    build_sab,
 )
 from monsab.util import is_prime, primitive_root
 from monsab.zoo import affine_group_1d, cyclic, dihedral
@@ -124,7 +120,8 @@ def main() -> None:
     print("=== Benchmark Configuration ===")
     print(f"Variables (n)    : {n}")
     print(f"Degree (d)       : {d}")
-    print(f"Full Dimension   : {MonomialClass(n, d).total_monomials}")
+    print(f"Full Dimension   : {MonomialClass(n, d).total_monomials()}")
+
     print(f"Group (g)        : {group_type}")
     print(f"Space (m)        : {space_type}")
     print(f"Threads (t)      : {threads}")
@@ -134,7 +131,7 @@ def main() -> None:
     print("===============================\n")
 
     # 1. Instantiate Group & Assertions
-    def instantiate_group() -> tuple[Any, dict[int, Permutation]]:
+    def instantiate_group() -> tuple[Any, list[Permutation]]:
         grp = None
         perms = []
         if group_type == "cyclic":
@@ -154,61 +151,30 @@ def main() -> None:
         else:
             raise ValueError(f"Unknown group {group_type}")
 
-        assert grp.description.verify(tuple(perms)), (
+        assert grp.test_generators(perms), (
             "Generated permutations do not satisfy the polycyclic presentation!"
         )
 
-        return grp, {i + 1: p for i, p in enumerate(perms)}
+        return grp, perms
 
-    grp, concrete_generators = timed_step("Instantiate group", instantiate_group)
+    grp, perms = timed_step("Instantiate group", instantiate_group)
 
-    # 2. Baum-Clausen
-    def run_baum_clausen() -> list[BaumClausenStage]:
-        stages = [
-            BaumClausenStage.trivial(
-                e=grp.description.order, presentation=grp.description
-            )
-        ]
-        for k, order in enumerate(grp.description.orders, start=1):
-            nxt = BaumClausenStage.next_level(stages[-1], g_i=k, p=order)
-            stages.append(nxt)
-        return stages
-
-    bc_stages = timed_step(
-        f"Baum-Clausen on abstract group of order {grp.description.order}",
-        run_baum_clausen,
-    )
-
-    # 3. Build Monomials
-    def build_monomials() -> tuple[Any, list[tuple[tuple[int, ...], ...]]]:
-        space = MonomialClass(n, d)
-        orbit_data = space.get_full_orbits(concrete_generators, num_threads=threads)
-        return space, orbit_data
-
-    monomial_space, orbits = timed_step(
-        "Build monomial space and orbits",
-        build_monomials,
-    )
-
-    # 4. Initialize SAB Transform
+    # 2. Build Monomial Space & SAB Transform
     def init_sab() -> Any:
-        abstract = BaumClausenPaths.from_baum_clausen(tuple(bc_stages))
+        space = MonomialClass(n, d)
+        return build_sab(space, grp, perms, num_threads=threads)
 
-        return build_monomial_sab(
-            abstract,
-            concrete_generators,
-            orbits,
-            monomial_space,
-            num_threads=threads,
-        )
+    transform = timed_step(
+        f"Build SAB transform (group order {grp.order})",
+        init_sab,
+    )
 
-    transform = timed_step("Initialize SAB transform", init_sab)
     final_blocks = transform.blocks
     monomial_space_d = MonomialClass(n, d)
 
     def generate_intertwiner_batch() -> list[Any]:
 
-        N = monomial_space_d.total_monomials
+        N = monomial_space_d.total_monomials()
 
         # We don't really care whether the sparse matrices are mathematically
         # commuting with the group action for the sake of the benchmark.

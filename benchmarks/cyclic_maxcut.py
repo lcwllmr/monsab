@@ -3,10 +3,13 @@ import time
 
 import cvxpy as cp
 
-from monsab.core import BaumClausenPaths, BaumClausenStage, PcGroup, Permutation
-from monsab.pop import SquarefreeMonomialSpace, build_monomial_sab
-from monsab.pop._lasserre import LasserreHierarchy
-from monsab.zoo import cyclic
+from monsab import (
+    SquarefreeMonomialSpace,
+    build_sab,
+    LasserreHierarchy,
+    Permutation,
+    zoo,
+)
 
 
 def format_time(elapsed: float) -> str:
@@ -33,16 +36,8 @@ def timed_step(name, func):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-n",
-        "--vertices",
-        type=int,
-        required=True,
-        help="Number of vertices of cyclic graph",
-    )
-    parser.add_argument(
-        "-t", "--level", type=int, required=True, help="Hierarchy level"
-    )
+    parser.add_argument("-n", "--vertices", type=int, default=7)
+    parser.add_argument("-t", "--level", type=int, default=2)
     parser.add_argument("--dont-solve", action="store_true", help="Skip SDP solve")
     args = parser.parse_args()
 
@@ -54,22 +49,9 @@ def main():
     print(f"Hierarchy level (t): {t}")
 
     # 1. Group
-    grp = cyclic(n)
     perms = [Permutation(tuple((i + 1) % n for i in range(n)))]
+    grp = zoo.cyclic(n).with_generators(perms)
     concrete_generators = {1: perms[0]}
-    grp_desc = PcGroup(
-        number_of_generators=grp.description.number_of_generators,
-        orders=grp.description.orders,
-        conjugation_exponents=grp.description.conjugation_exponents,
-        power_tails=grp.description.power_tails,
-        conjugation_tails=grp.description.conjugation_tails,
-        generators=[list(perms[0].data)],
-    )
-
-    stages = [BaumClausenStage.trivial(e=n, presentation=grp_desc)]
-    nxt = BaumClausenStage.next_level(stages[-1], g_i=1, p=n)
-    stages.append(nxt)
-    paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
 
     # 2. Spaces
     space = SquarefreeMonomialSpace(n)
@@ -80,24 +62,16 @@ def main():
 
     orbits_2t = timed_step(
         "Build orbits for 2t",
-        lambda: space.get_orbit_reps_and_sizes(grp_desc, 2 * t),
-    )
-    orbits_t_full = timed_step(
-        "Build orbits for t",
-        lambda: space.get_full_orbits(concrete_generators, t),
+        lambda: space.get_orbit_reps_and_sizes(grp, 2 * t),
     )
 
     # 3. SAB Transform
-    # To use implicit Reynolds, we must provide coset_reps for the fast Coset Averaging.
-    # For cyclic(n), we can just provide all group elements for every representation.
     all_g = [Permutation(tuple((j + i) % n for j in range(n))) for i in range(n)]
-    coset_reps = {rep_id: all_g for rep_id in paths.paths.keys()}
+    coset_reps = {rep_id: all_g for rep_id in range(n)}
 
     transform = timed_step(
         "Initialize SAB transform",
-        lambda: build_monomial_sab(
-            paths, concrete_generators, orbits_t_full, space, d=t, coset_reps=coset_reps
-        ),
+        lambda: build_sab(space, grp, concrete_generators, d=t, coset_reps=coset_reps),
     )
 
     # 4. Generate Lasserre Matrices

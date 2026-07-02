@@ -6,12 +6,21 @@ def test_polycyclic_presentation():
     p = PcGroup(
         number_of_generators=2,
         orders=(2, 3),
-        conjugation_exponents={(0, 1): 2},
+        conjugation_exponents={(0, 1): 1},
         power_tails={0: (), 1: ()},
         conjugation_tails={},
     )
-    assert p.has_only_prime_factors
+    assert p.test_consistency()
     assert p.is_normal_series
+
+    non_prime = PcGroup(
+        number_of_generators=1,
+        orders=(4,),
+        conjugation_exponents={},
+        power_tails={0: ()},
+        conjugation_tails={},
+    )
+    assert not non_prime.test_consistency()
 
 
 def test_polycyclic_edge_cases():

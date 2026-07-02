@@ -5,21 +5,19 @@ Monomial spaces and generation.
 from monsab.core import (
     SABTransform,
     BaumClausenPaths,
+    BaumClausenStage,
     MonomialRepresentationBundle,
     analyze_monomial_representations,
+    PcGroup,
 )
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import math
 from collections import deque
 import array
 
-from typing import TYPE_CHECKING
 from monsab._backend import Permutation, OrbitLifter
 from monsab import _backend
-
-if TYPE_CHECKING:
-    from monsab.core import PcGroup
 
 
 def _compute_orbit_chunk(
@@ -124,8 +122,9 @@ class MonomialSpace:
     Uses O(1) memory via a mathematically dense Combinatorial Bijection, avoiding all tuple objects.
     """
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, d: int | None = None):
         self.n = n
+        self.d = d
         self.offsets = [
             0,
             1,
@@ -133,6 +132,17 @@ class MonomialSpace:
 
         self.binom_2 = tuple(math.comb(i, 2) for i in range(n + 3))
         self.binom_3 = tuple(math.comb(i, 3) for i in range(n + 3))
+        if d is not None:
+            self._ensure_d(d)
+
+    def _get_d(self, d: int | None) -> int:
+        if d is not None:
+            return d
+        if self.d is not None:
+            return self.d
+        raise ValueError(
+            "Degree d must be specified either at initialization or in the method call."
+        )
 
     def _ensure_d(self, d: int) -> None:
         if len(self.offsets) <= d + 1:
@@ -141,7 +151,8 @@ class MonomialSpace:
                 total += math.comb(self.n + k - 1, k)
                 self.offsets.append(total)
 
-    def total_monomials(self, d: int) -> int:
+    def total_monomials(self, d: int | None = None) -> int:
+        d = self._get_d(d)
         self._ensure_d(d)
         return self.offsets[d + 1]
 
@@ -270,9 +281,10 @@ class MonomialSpace:
             return self.rank_tuple(tuple(new_tup))
 
     def get_orbits(
-        self, G_gens: dict[int, Permutation], d: int
+        self, G_gens: dict[int, Permutation], d: int | None = None
     ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns one representative per orbit."""
+        d = self._get_d(d)
         self._ensure_d(d)
         total_monomials = self.offsets[d + 1]
         visited = bytearray(total_monomials)
@@ -299,11 +311,14 @@ class MonomialSpace:
 
         return orbit_reps
 
-    def get_orbit_reps_and_sizes(self, group: "PcGroup", d: int) -> dict[int, int]:
+    def get_orbit_reps_and_sizes(
+        self, group: PcGroup, d: int | None = None
+    ) -> dict[int, int]:
         """
         Uses the fast OrbitLifter to evaluate the canonical orbit representative
         for every monomial up to degree d and returns a dictionary mapping rep_id to orbit_size.
         """
+        d = self._get_d(d)
         if d > 4:
             raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
 
@@ -321,9 +336,13 @@ class MonomialSpace:
         return rep_counts
 
     def get_full_orbits(
-        self, G_gens: dict[int, Permutation], d: int, num_threads: int = 1
+        self,
+        G_gens: dict[int, Permutation],
+        d: int | None = None,
+        num_threads: int = 1,
     ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns a list of full orbits containing integer IDs."""
+        d = self._get_d(d)
         self._ensure_d(d)
         total_monomials = self.offsets[d + 1]
         visited = bytearray(total_monomials)
@@ -379,7 +398,7 @@ def build_monomial_sab(
     G_gens: Mapping[int, Permutation],
     orbits: list[tuple[int, ...]],
     space: "MonomialSpace | SquarefreeMonomialSpace",
-    d: int,
+    d: int | None = None,
     num_threads: int = 1,
     coset_reps: dict[int, list[Permutation]] | None = None,
 ) -> SABTransform:
@@ -400,6 +419,7 @@ def build_monomial_sab(
     Returns:
         SABTransform: A transform object that can evaluate the SAB basis.
     """
+    d = space._get_d(d)
     is_squarefree = isinstance(space, SquarefreeMonomialSpace)
 
     if isinstance(abstract, MonomialRepresentationBundle):
@@ -431,6 +451,61 @@ def build_monomial_sab(
         space.total_monomials(d),
         coset_reps_dict if coset_reps is not None else None,
         coset_reps_inv_dict if coset_reps is not None else None,
+    )
+
+
+def build_sab(
+    space: "MonomialSpace | SquarefreeMonomialSpace",
+    group: PcGroup,
+    generators: Mapping[int, Permutation]
+    | Sequence[Permutation]
+    | Sequence[Sequence[int]],
+    d: int | None = None,
+    num_threads: int = 1,
+    coset_reps: dict[int, list[Permutation]] | None = None,
+) -> SABTransform:
+    """
+    High-level orchestrator that builds a Fast SAB Transform in a single step.
+
+    Orchestrates Baum-Clausen induction over the polycyclic presentation, computes orbits,
+    and returns an assembled `SABTransform`.
+    """
+    if isinstance(generators, Mapping):
+        if set(generators.keys()) == set(range(group.number_of_generators)):
+            g_gens = {i + 1: generators[i] for i in range(group.number_of_generators)}
+        else:
+            g_gens = dict(generators)
+    else:
+        g_gens = {}
+        for idx, gen in enumerate(generators, start=1):
+            if isinstance(gen, Permutation):
+                g_gens[idx] = gen
+            else:
+                g_gens[idx] = Permutation(tuple(gen))
+
+    if len(g_gens) != group.number_of_generators:
+        raise ValueError(
+            f"Expected {group.number_of_generators} generators, but got {len(g_gens)}."
+        )
+
+    d = space._get_d(d)
+
+    e_safe = math.prod(group.orders)
+    stages = [BaumClausenStage.trivial(e=e_safe, presentation=group)]
+    for k, order in enumerate(group.orders, start=1):
+        stages.append(BaumClausenStage.next_level(stages[-1], g_i=k, p=order))
+    abstract_paths = BaumClausenPaths.from_baum_clausen(tuple(stages))
+
+    orbits = space.get_full_orbits(g_gens, d=d, num_threads=num_threads)
+
+    return build_monomial_sab(
+        abstract_paths,
+        g_gens,
+        orbits,
+        space,
+        d=d,
+        num_threads=num_threads,
+        coset_reps=coset_reps,
     )
 
 
@@ -536,12 +611,22 @@ class SquarefreeMonomialSpace:
     Uses O(1) memory via a mathematically dense Combinatorial Bijection, avoiding all tuple objects.
     """
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, d: int | None = None):
         self.n = n
+        self.d = d
         self.offsets = [0, 1]
 
         self.binom_2 = tuple(math.comb(i, 2) for i in range(n + 3))
         self.binom_3 = tuple(math.comb(i, 3) for i in range(n + 3))
+        if d is not None:
+            self._ensure_d(d)
+
+    def _get_d(self, d: int | None) -> int:
+        if d is not None:
+            return d
+        if self.d is not None:
+            return self.d
+        return self.n
 
     def _ensure_d(self, d: int) -> None:
         if len(self.offsets) <= d + 1:
@@ -550,7 +635,8 @@ class SquarefreeMonomialSpace:
                 total += math.comb(self.n, k)
                 self.offsets.append(total)
 
-    def total_monomials(self, d: int) -> int:
+    def total_monomials(self, d: int | None = None) -> int:
+        d = self._get_d(d)
         self._ensure_d(d)
         return self.offsets[d + 1]
 
@@ -679,9 +765,10 @@ class SquarefreeMonomialSpace:
             return self.rank_tuple(tuple(new_tup))
 
     def get_orbits(
-        self, G_gens: dict[int, Permutation], d: int
+        self, G_gens: dict[int, Permutation], d: int | None = None
     ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns one representative per orbit."""
+        d = self._get_d(d)
         self._ensure_d(d)
         total_monomials = self.offsets[d + 1]
         visited = bytearray(total_monomials)
@@ -707,11 +794,14 @@ class SquarefreeMonomialSpace:
 
         return orbit_reps
 
-    def get_orbit_reps_and_sizes(self, group: "PcGroup", d: int) -> dict[int, int]:
+    def get_orbit_reps_and_sizes(
+        self, group: PcGroup, d: int | None = None
+    ) -> dict[int, int]:
         """
         Uses the fast OrbitLifter to evaluate the canonical orbit representative
         for every squarefree monomial and returns a dictionary mapping rep_id to orbit_size.
         """
+        d = self._get_d(d)
         if d > 4:
             raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
 
@@ -729,9 +819,13 @@ class SquarefreeMonomialSpace:
         return rep_counts
 
     def get_full_orbits(
-        self, G_gens: dict[int, Permutation], d: int, num_threads: int = 1
+        self,
+        G_gens: dict[int, Permutation],
+        d: int | None = None,
+        num_threads: int = 1,
     ) -> list[tuple[int, ...]]:
         """Groups all monomials into G-orbits and returns a list of full orbits containing integer IDs."""
+        d = self._get_d(d)
         self._ensure_d(d)
         total_monomials = self.offsets[d + 1]
         visited = bytearray(total_monomials)
