@@ -89,8 +89,8 @@ def test_reynolds_extraction_equivalence():
                     ] += X1_dense[i, j] / 3.0
     X1_hk_sparse = scipy.sparse.csr_matrix(X1_hk)
 
-    fast_blocks = transform_no_reps([X1_avg_sparse])
-    method1_blocks = transform_c3([X1_hk_sparse], reynolds=True)
+    fast_blocks = transform_no_reps.apply_forward([X1_avg_sparse])
+    method1_blocks = transform_c3.apply_forward([X1_hk_sparse], reynolds=True)
 
     for k in range(len(fast_blocks)):
         if fast_blocks[k]:

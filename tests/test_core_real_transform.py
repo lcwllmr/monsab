@@ -43,7 +43,9 @@ def test_real_transform_cyclic_group():
     T_sparse = scipy.sparse.csr_matrix(T_dense)
 
     # 1. Complex transform
-    blocks_cplx = [b_list[0] for b_list in transform(T_sparse, realize=False)]
+    blocks_cplx = [
+        b_list[0] for b_list in transform.apply_forward(T_sparse, realize=False)
+    ]
 
     # There are 3 blocks in the complex transform because realize=False
     assert len(blocks_cplx) == 3
@@ -52,7 +54,9 @@ def test_real_transform_cyclic_group():
     assert blocks_cplx[2].shape == (1, 1)
 
     # 2. Real transform
-    blocks_real = [b_list[0] for b_list in transform(T_sparse, realize=True)]
+    blocks_real = [
+        b_list[0] for b_list in transform.apply_forward(T_sparse, realize=True)
+    ]
 
     # Expect: One 2x2 real block (fs=1), one 2x2 real block (fs=0)
     assert len(blocks_real) == 2
@@ -147,7 +151,9 @@ def test_real_transform_quaternionic():
     T_dense /= 8.0
     T_sparse = scipy.sparse.csr_matrix(T_dense)
 
-    blocks_real = [b_list[0] for b_list in transform(T_sparse, realize=True)]
+    blocks_real = [
+        b_list[0] for b_list in transform.apply_forward(T_sparse, realize=True)
+    ]
 
     # The SAB transform might merge some reps depending on abstract paths.
     # Q8 has four 1D irreps (fs=1) and one 2D irrep (fs=-1)

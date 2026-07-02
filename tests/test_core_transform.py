@@ -55,7 +55,7 @@ def test_transform_edge_cases():
     from monsab.core import SABTransform, SABBlock
 
     empty_transform = SABTransform(blocks=(), N=0)
-    assert empty_transform([]) == []
+    assert empty_transform.apply_forward([]) == []
     assert empty_transform.explicit_basis() == []
 
     # Test sparse explicit basis
@@ -272,7 +272,7 @@ def test_fast_transform_equivalence():
     explicit_matrices = transform.explicit_basis(sparse=False)
 
     # Fast transform
-    fast_blocks_batch = transform([T_sparse])
+    fast_blocks_batch = transform.apply_forward([T_sparse])
 
     for i, block in enumerate(transform.blocks):
         U_k = explicit_matrices[i]

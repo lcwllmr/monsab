@@ -1,6 +1,6 @@
 use crate::monomial::apply_permutation_arr;
 use num_complex::Complex64;
-use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -97,13 +97,15 @@ impl SABTransform {
         self.n_monomials
     }
 
-    #[pyo3(signature = (matrices, reynolds=false, realize=false))]
-    fn __call__<'py>(
+    #[pyo3(signature = (matrices, reynolds=false, realize=false, reduced=true, sparse=true))]
+    fn apply_forward<'py>(
         &self,
         py: pyo3::Python<'py>,
         matrices: Bound<'py, PyAny>,
         reynolds: bool,
         realize: bool,
+        reduced: bool,
+        sparse: bool,
     ) -> PyResult<Vec<Vec<Bound<'py, PyAny>>>> {
         let mat_list: Vec<Bound<'py, PyAny>> = if matrices.is_instance_of::<pyo3::types::PyList>()
             || matrices.is_instance_of::<pyo3::types::PyTuple>()
@@ -117,15 +119,38 @@ impl SABTransform {
             return Ok(vec![]);
         }
 
+        let scipy_sparse_in = py.import("scipy.sparse")?;
+        let csr_matrix_in = scipy_sparse_in.getattr("csr_matrix")?;
+
         let mut batch_data = Vec::with_capacity(mat_list.len());
         let mut batch_indices = Vec::with_capacity(mat_list.len());
         let mut batch_indptr = Vec::with_capacity(mat_list.len());
 
         for m in &mat_list {
-            let data_obj = m.getattr("data")?;
-            let indices_obj = m.getattr("indices")?;
-            let indptr_obj = m.getattr("indptr")?;
-            let data_arr: PyReadonlyArray1<'py, f64> = data_obj.extract()?;
+            let csr_m = if m.hasattr("indices")? && m.hasattr("indptr")? {
+                if m.hasattr("tocsr")? {
+                    m.call_method0("tocsr")?
+                } else {
+                    m.clone()
+                }
+            } else {
+                csr_matrix_in.call((m,), None)?
+            };
+            let data_obj = csr_m.getattr("data")?;
+            let indices_obj = csr_m.getattr("indices")?;
+            let indptr_obj = csr_m.getattr("indptr")?;
+            let data_arr: PyReadonlyArray1<'py, Complex64> =
+                if let Ok(arr) = data_obj.extract::<PyReadonlyArray1<'py, Complex64>>() {
+                    arr
+                } else {
+                    let real_arr: PyReadonlyArray1<'py, f64> = data_obj.extract()?;
+                    let comp_vec: Vec<Complex64> = real_arr
+                        .as_slice()?
+                        .iter()
+                        .map(|&x| Complex64::new(x, 0.0))
+                        .collect();
+                    comp_vec.into_pyarray(py).readonly()
+                };
             let indices_arr: PyReadonlyArray1<'py, i32> = indices_obj.extract()?;
             let indptr_arr: PyReadonlyArray1<'py, i32> = indptr_obj.extract()?;
             batch_data.push(data_arr);
@@ -149,46 +174,83 @@ impl SABTransform {
         let coo_matrix = scipy_sparse.getattr("coo_matrix")?;
         let csr_matrix = scipy_sparse.getattr("csr_matrix")?;
 
-        let mut final_blocks = Vec::with_capacity(self.blocks.len());
+        let mut final_blocks = Vec::new();
         for (block, block_res) in self.blocks.iter().zip(results) {
             if realize && self.realize_skip_reps.contains(&block.rep_id) {
                 continue;
             }
             let mut b_list = Vec::with_capacity(block_res.len());
             for (data, rows, cols, m_k) in block_res {
-                if data.len()? == 0 {
-                    let dtype = if realize {
-                        &float64_type
+                let mat = if sparse {
+                    if data.len()? == 0 {
+                        let dtype = if realize {
+                            &float64_type
+                        } else {
+                            &complex128_type
+                        };
+                        let shape = (m_k, m_k);
+                        let kwargs = pyo3::types::PyDict::new(py);
+                        kwargs.set_item("dtype", dtype)?;
+                        csr_matrix.call((shape,), Some(&kwargs))?
                     } else {
-                        &complex128_type
-                    };
-                    let shape = (m_k, m_k);
-                    let kwargs = pyo3::types::PyDict::new(py);
-                    kwargs.set_item("dtype", dtype)?;
-                    let mat = csr_matrix.call((shape,), Some(&kwargs))?;
-                    b_list.push(mat);
+                        let data_val: Bound<'py, PyAny> = if realize {
+                            let slice = data.readonly();
+                            let data_real: Vec<f64> =
+                                slice.as_slice()?.iter().map(|c| c.re).collect();
+                            data_real.into_pyarray(py).into_any()
+                        } else {
+                            data.into_any()
+                        };
+                        let rows_val = rows.into_any();
+                        let cols_val = cols.into_any();
+                        let coords = (rows_val, cols_val);
+                        let arg0 = (data_val, coords);
+                        let kwargs = pyo3::types::PyDict::new(py);
+                        kwargs.set_item("shape", (m_k, m_k))?;
+                        coo_matrix
+                            .call((arg0,), Some(&kwargs))?
+                            .getattr("tocsr")?
+                            .call0()?
+                    }
                 } else {
-                    let data_val: Bound<'py, PyAny> = if realize {
-                        let slice = data.readonly();
-                        let data_real: Vec<f64> = slice.as_slice()?.iter().map(|c| c.re).collect();
-                        data_real.into_pyarray(py).into_any()
+                    let mut arr = ndarray::Array2::<Complex64>::zeros((m_k, m_k));
+                    let data_s = data.readonly();
+                    let rows_s = rows.readonly();
+                    let cols_s = cols.readonly();
+                    let data_slice = data_s.as_slice()?;
+                    let rows_slice = rows_s.as_slice()?;
+                    let cols_slice = cols_s.as_slice()?;
+                    for i in 0..data_slice.len() {
+                        arr[[rows_slice[i] as usize, cols_slice[i] as usize]] += data_slice[i];
+                    }
+                    if realize {
+                        let mut arr_real = ndarray::Array2::<f64>::zeros((m_k, m_k));
+                        for i in 0..m_k {
+                            for j in 0..m_k {
+                                arr_real[[i, j]] = arr[[i, j]].re;
+                            }
+                        }
+                        arr_real.into_pyarray(py).into_any()
                     } else {
-                        data.into_any()
-                    };
-                    let rows_val = rows.into_any();
-                    let cols_val = cols.into_any();
-                    let coords = (rows_val, cols_val);
-                    let arg0 = (data_val, coords);
-                    let kwargs = pyo3::types::PyDict::new(py);
-                    kwargs.set_item("shape", (m_k, m_k))?;
-                    let mat = coo_matrix
-                        .call((arg0,), Some(&kwargs))?
-                        .getattr("tocsr")?
-                        .call0()?;
-                    b_list.push(mat);
-                }
+                        arr.into_pyarray(py).into_any()
+                    }
+                };
+                b_list.push(mat);
             }
-            final_blocks.push(b_list);
+
+            let m_multiplicity = if !reduced {
+                if realize && block.fs_indicator == Some(-1) {
+                    block.d_k / 2
+                } else {
+                    block.d_k
+                }
+            } else {
+                1
+            };
+
+            for _ in 0..m_multiplicity {
+                final_blocks.push(b_list.clone());
+            }
         }
         Ok(final_blocks)
     }
@@ -266,12 +328,427 @@ impl SABTransform {
         Ok(matrices)
     }
 
+    #[pyo3(signature = (blocks, realize=false, sparse=true))]
+    fn apply_inverse<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+        blocks: Bound<'py, PyAny>,
+        realize: bool,
+        sparse: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if self.blocks.is_empty() || self.n_monomials == 0 {
+            let n = self.n_monomials;
+            let np_mod = py.import("numpy")?;
+            let zeros = np_mod.getattr("zeros")?;
+            let dtype = if realize {
+                np_mod.getattr("float64")?
+            } else {
+                np_mod.getattr("complex128")?
+            };
+            let shape = (n, n);
+            let kwargs = pyo3::types::PyDict::new(py);
+            kwargs.set_item("dtype", dtype)?;
+            let arr = zeros.call((shape,), Some(&kwargs))?;
+            if sparse {
+                let scipy_sparse = py.import("scipy.sparse")?;
+                let csr = scipy_sparse.getattr("csr_matrix")?.call((arr,), None)?;
+                return Ok(csr);
+            } else {
+                return Ok(arr);
+            }
+        }
+
+        let outer_list: Vec<Bound<'py, PyAny>> = if blocks.is_instance_of::<pyo3::types::PyList>()
+            || blocks.is_instance_of::<pyo3::types::PyTuple>()
+        {
+            blocks.extract()?
+        } else {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "blocks must be a list or tuple of blocks (or list of lists for batch mode).",
+            ));
+        };
+
+        if outer_list.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "blocks list is empty.",
+            ));
+        }
+
+        let is_batch = outer_list[0].is_instance_of::<pyo3::types::PyList>()
+            || outer_list[0].is_instance_of::<pyo3::types::PyTuple>();
+
+        let batch_size = if is_batch {
+            let first_list: Vec<Bound<'py, PyAny>> = outer_list[0].extract()?;
+            first_list.len()
+        } else {
+            1
+        };
+
+        let retained_blocks: Vec<&SABBlock> = if realize {
+            self.blocks
+                .iter()
+                .filter(|b| !self.realize_skip_reps.contains(&b.rep_id))
+                .collect()
+        } else {
+            self.blocks.iter().collect()
+        };
+        let r = retained_blocks.len();
+        let mut m_multiplicities = Vec::with_capacity(r);
+        for b in &retained_blocks {
+            if b.d_k > 1 && b.coset_reps.is_none() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Reconstructing multi-dimensional representation {} (d_k = {}) in apply_inverse requires coset_reps to be provided during build_sab / build_monomial_sab.",
+                    b.rep_id, b.d_k
+                )));
+            }
+            let m = if realize && b.fs_indicator == Some(-1) {
+                b.d_k / 2
+            } else {
+                b.d_k
+            };
+            m_multiplicities.push(m);
+        }
+        let total_full_blocks: usize = m_multiplicities.iter().sum();
+
+        if outer_list.len() != r && outer_list.len() != total_full_blocks {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Expected {} (reduced) or {} (full) blocks, but got {} blocks.",
+                r,
+                total_full_blocks,
+                outer_list.len()
+            )));
+        }
+        let is_reduced = outer_list.len() == r;
+        let mut block_indices_in_input = Vec::with_capacity(r);
+        let mut curr_idx = 0;
+        for (k, &m) in m_multiplicities.iter().enumerate() {
+            if is_reduced {
+                block_indices_in_input.push(k);
+            } else {
+                block_indices_in_input.push(curr_idx);
+                curr_idx += m;
+            }
+        }
+
+        let mut all_batch_triplets = Vec::with_capacity(batch_size);
+        for b_idx in 0..batch_size {
+            let mut block_triplets = Vec::with_capacity(r);
+            for (k, &b_idx_in_input) in block_indices_in_input.iter().enumerate() {
+                let block_item = if is_batch {
+                    let inner_list: Vec<Bound<'py, PyAny>> =
+                        outer_list[b_idx_in_input].extract()?;
+                    inner_list[b_idx].clone()
+                } else {
+                    outer_list[b_idx_in_input].clone()
+                };
+
+                let block = retained_blocks[k];
+                let m_k = block.dim;
+
+                let coo = if block_item.hasattr("tocoo")? {
+                    block_item.call_method0("tocoo")?
+                } else {
+                    let scipy_sparse_blk = py.import("scipy.sparse")?;
+                    scipy_sparse_blk
+                        .getattr("coo_matrix")?
+                        .call((&block_item,), None)?
+                };
+                let rows_arr: PyReadonlyArray1<'py, i32> = coo.getattr("row")?.extract()?;
+                let cols_arr: PyReadonlyArray1<'py, i32> = coo.getattr("col")?.extract()?;
+                let mut r_vec = rows_arr.as_slice()?.to_vec();
+                let mut c_vec = cols_arr.as_slice()?.to_vec();
+                let mut d = if realize {
+                    let data_arr: PyReadonlyArray1<'py, f64> = coo.getattr("data")?.extract()?;
+                    data_arr
+                        .as_slice()?
+                        .iter()
+                        .map(|&val| Complex64::new(val, 0.0))
+                        .collect()
+                } else {
+                    let data_arr: PyReadonlyArray1<'py, Complex64> =
+                        coo.getattr("data")?.extract()?;
+                    data_arr.as_slice()?.to_vec()
+                };
+
+                if realize {
+                    if block.fs_indicator == Some(1) && block.v_matrix_data.is_some() {
+                        if let (Some(v_cols), Some(v_dagger_rows)) =
+                            (&block.v_cols, &block.v_dagger_rows)
+                        {
+                            let mut tmp_map: HashMap<usize, Complex64> = HashMap::new();
+                            for i in 0..d.len() {
+                                let row_real = r_vec[i] as usize;
+                                let col_real = c_vec[i] as usize;
+                                let val_real = d[i];
+                                if row_real < v_cols.len() && col_real < v_dagger_rows.len() {
+                                    for &(i_idx, v_val) in &v_cols[row_real] {
+                                        for &(j_idx, v_dag_val) in &v_dagger_rows[col_real] {
+                                            let prod = v_val * val_real * v_dag_val;
+                                            let flat_idx = i_idx * m_k + j_idx;
+                                            *tmp_map
+                                                .entry(flat_idx)
+                                                .or_insert(Complex64::new(0.0, 0.0)) += prod;
+                                        }
+                                    }
+                                }
+                            }
+                            d.clear();
+                            r_vec.clear();
+                            c_vec.clear();
+                            for (flat_idx, val) in tmp_map {
+                                if val.norm_sqr() > 1e-24 {
+                                    d.push(val);
+                                    r_vec.push((flat_idx / m_k) as i32);
+                                    c_vec.push((flat_idx % m_k) as i32);
+                                }
+                            }
+                        }
+                    } else if block.fs_indicator == Some(0) || block.fs_indicator == Some(-1) {
+                        let mut tmp_map: HashMap<usize, Complex64> = HashMap::new();
+                        for i in 0..d.len() {
+                            let r_idx = r_vec[i] as usize;
+                            let c_idx = c_vec[i] as usize;
+                            let val = d[i];
+                            if r_idx < m_k && c_idx < m_k {
+                                *tmp_map
+                                    .entry(r_idx * m_k + c_idx)
+                                    .or_insert(Complex64::new(0.0, 0.0)) += val;
+                            } else if r_idx < m_k && c_idx >= m_k {
+                                *tmp_map
+                                    .entry(r_idx * m_k + (c_idx - m_k))
+                                    .or_insert(Complex64::new(0.0, 0.0)) +=
+                                    val * Complex64::new(0.0, 1.0);
+                            }
+                        }
+                        d.clear();
+                        r_vec.clear();
+                        c_vec.clear();
+                        for (flat_idx, val) in tmp_map {
+                            if val.norm_sqr() > 1e-24 {
+                                d.push(val);
+                                r_vec.push((flat_idx / m_k) as i32);
+                                c_vec.push((flat_idx % m_k) as i32);
+                            }
+                        }
+                    }
+                }
+
+                block_triplets.push((d, r_vec, c_vec, m_k));
+            }
+            all_batch_triplets.push(block_triplets);
+        }
+
+        let n = self.n_monomials;
+        let offsets = &self.offsets;
+        let binom_2 = &self.binom_2;
+        let binom_3 = &self.binom_3;
+        let is_squarefree = self.is_squarefree;
+        let n_vars = self.n;
+        let d_deg = self.d;
+
+        let batch_results: Vec<(Vec<Complex64>, Vec<i32>, Vec<i32>)> = (0..batch_size)
+            .map(|b_idx| {
+                let block_triplets = &all_batch_triplets[b_idx];
+                let block_outputs: Vec<(Vec<Complex64>, Vec<i32>, Vec<i32>)> = retained_blocks
+                    .par_iter()
+                    .enumerate()
+                    .map(|(k, block)| {
+                        let (d, r_vec, c_vec, m_k) = &block_triplets[k];
+                        if d.is_empty() || *m_k == 0 {
+                            return (Vec::new(), Vec::new(), Vec::new());
+                        }
+
+                        let mut orbit_coords: Vec<Vec<(u32, u32)>> = vec![Vec::new(); *m_k];
+                        for ((&v, &j), &ell) in block
+                            .valid_cols
+                            .iter()
+                            .zip(block.j_values.iter())
+                            .zip(block.l_values.iter())
+                        {
+                            if (j as usize) < *m_k {
+                                orbit_coords[j as usize].push((v, ell));
+                            }
+                        }
+
+                        let e_f64 = block.e as f64;
+                        let m_iter = if let Some(reps) = &block.coset_reps {
+                            if block.d_k > 0 {
+                                block.d_k
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        };
+
+                        let est_cap = d.len() * m_iter * 4;
+                        let mut out_vals = Vec::with_capacity(est_cap);
+                        let mut out_rows = Vec::with_capacity(est_cap);
+                        let mut out_cols = Vec::with_capacity(est_cap);
+
+                        for idx in 0..d.len() {
+                            let j_val = r_vec[idx] as usize;
+                            let j_prime_val = c_vec[idx] as usize;
+                            let mut b_val = d[idx];
+
+                            if realize
+                                && (block.fs_indicator == Some(0) || block.fs_indicator == Some(-1))
+                            {
+                                b_val *= 2.0;
+                            }
+
+                            if j_val >= *m_k || j_prime_val >= *m_k {
+                                continue;
+                            }
+
+                            let size_j = block.orbit_sizes[j_val] as f64;
+                            let size_j_prime = block.orbit_sizes[j_prime_val] as f64;
+                            let denom = (size_j * size_j_prime).sqrt();
+
+                            for &(v, ell_v) in &orbit_coords[j_val] {
+                                for &(w, ell_w) in &orbit_coords[j_prime_val] {
+                                    let diff = (ell_v as f64) - (ell_w as f64);
+                                    let angle = -2.0 * std::f64::consts::PI * diff / e_f64;
+                                    let phase = Complex64::new(angle.cos(), angle.sin());
+                                    let w_val = phase * b_val / denom;
+
+                                    if w_val.norm_sqr() > 1e-28 {
+                                        for m in 0..m_iter {
+                                            let (row_target, col_target) =
+                                                if let Some(reps) = &block.coset_reps {
+                                                    if m < reps.len() {
+                                                        (
+                                                            apply_permutation_arr(
+                                                                v as usize,
+                                                                &reps[m],
+                                                                n_vars,
+                                                                d_deg,
+                                                                offsets,
+                                                                binom_2,
+                                                                binom_3,
+                                                                is_squarefree,
+                                                            )
+                                                                as i32,
+                                                            apply_permutation_arr(
+                                                                w as usize,
+                                                                &reps[m],
+                                                                n_vars,
+                                                                d_deg,
+                                                                offsets,
+                                                                binom_2,
+                                                                binom_3,
+                                                                is_squarefree,
+                                                            )
+                                                                as i32,
+                                                        )
+                                                    } else {
+                                                        (v as i32, w as i32)
+                                                    }
+                                                } else {
+                                                    (v as i32, w as i32)
+                                                };
+
+                                            out_vals.push(w_val);
+                                            out_rows.push(row_target);
+                                            out_cols.push(col_target);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        (out_vals, out_rows, out_cols)
+                    })
+                    .collect();
+
+                let mut final_vals = Vec::new();
+                let mut final_rows = Vec::new();
+                let mut final_cols = Vec::new();
+                for (v, r, c) in block_outputs {
+                    final_vals.extend(v);
+                    final_rows.extend(r);
+                    final_cols.extend(c);
+                }
+                (final_vals, final_rows, final_cols)
+            })
+            .collect();
+
+        let scipy_sparse = if sparse {
+            Some(py.import("scipy.sparse")?)
+        } else {
+            None
+        };
+        let coo_matrix = scipy_sparse
+            .as_ref()
+            .map(|m| m.getattr("coo_matrix"))
+            .transpose()?;
+
+        let mut out_list = Vec::with_capacity(batch_size);
+        for (vals, rows, cols) in batch_results {
+            let mat = if sparse {
+                let (vals_obj, rows_obj, cols_obj): (
+                    Bound<'py, PyAny>,
+                    Bound<'py, PyAny>,
+                    Bound<'py, PyAny>,
+                ) = if realize {
+                    let real_vals: Vec<f64> = vals.iter().map(|c| c.re).collect();
+                    (
+                        real_vals.into_pyarray(py).into_any(),
+                        rows.into_pyarray(py).into_any(),
+                        cols.into_pyarray(py).into_any(),
+                    )
+                } else {
+                    (
+                        vals.into_pyarray(py).into_any(),
+                        rows.into_pyarray(py).into_any(),
+                        cols.into_pyarray(py).into_any(),
+                    )
+                };
+                let coords = (rows_obj, cols_obj);
+                let arg0 = (vals_obj, coords);
+                let kwargs = pyo3::types::PyDict::new(py);
+                kwargs.set_item("shape", (n, n))?;
+                if let Some(coo_mod) = &coo_matrix {
+                    coo_mod
+                        .call((arg0,), Some(&kwargs))?
+                        .getattr("tocsr")?
+                        .call0()?
+                } else {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "scipy.sparse not found",
+                    ));
+                }
+            } else {
+                if realize {
+                    let mut arr = ndarray::Array2::<f64>::zeros((n, n));
+                    for i in 0..vals.len() {
+                        arr[[rows[i] as usize, cols[i] as usize]] += vals[i].re;
+                    }
+                    arr.into_pyarray(py).into_any()
+                } else {
+                    let mut arr = ndarray::Array2::<Complex64>::zeros((n, n));
+                    for i in 0..vals.len() {
+                        arr[[rows[i] as usize, cols[i] as usize]] += vals[i];
+                    }
+                    arr.into_pyarray(py).into_any()
+                }
+            };
+            out_list.push(mat);
+        }
+
+        if is_batch {
+            let py_list = pyo3::types::PyList::new(py, &out_list)?;
+            Ok(py_list.into_any())
+        } else {
+            Ok(out_list[0].clone())
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     #[pyo3(signature = (batch_data, batch_indices, batch_indptr, reynolds=false, realize=false))]
     fn extract_batch<'py>(
         &self,
         py: pyo3::Python<'py>,
-        batch_data: Vec<PyReadonlyArray1<'py, f64>>,
+        batch_data: Vec<PyReadonlyArray1<'py, Complex64>>,
         batch_indices: Vec<PyReadonlyArray1<'py, i32>>,
         batch_indptr: Vec<PyReadonlyArray1<'py, i32>>,
         reynolds: bool,
@@ -321,8 +798,8 @@ impl SABTransform {
                     let mut rows = Vec::with_capacity(block.valid_cols.len());
                     let mut cols = Vec::with_capacity(block.valid_cols.len());
 
-                    let m_iter = if reynolds && block.coset_reps.is_some() {
-                        block.d_k
+                    let m_iter = if let (true, Some(reps)) = (reynolds, &block.coset_reps) {
+                        reps.len()
                     } else {
                         1
                     };

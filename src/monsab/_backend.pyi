@@ -44,12 +44,20 @@ class SABTransform:
         _rust_transform: typing.Any | None = None,
         _realize_skip_reps: set[int] | None = None,
     ) -> None: ...
-    def __call__(
+    def apply_forward(
         self,
         matrices: typing.Any,
         reynolds: bool = False,
         realize: bool = False,
+        reduced: bool = True,
+        sparse: bool = True,
     ) -> list[list[typing.Any]]: ...
+    def apply_inverse(
+        self,
+        blocks: typing.Any,
+        realize: bool = False,
+        sparse: bool = True,
+    ) -> typing.Any: ...
     def explicit_basis(
         self, sparse: bool = True, realize: bool = False
     ) -> list[typing.Any]: ...

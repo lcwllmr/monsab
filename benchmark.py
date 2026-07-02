@@ -213,7 +213,7 @@ def main() -> None:
                 total_elements += mat.shape[0] * mat.shape[1]
 
             start_t = time.perf_counter()
-            _ = transform(batch_matrices, realize=args.realize)
+            _ = transform.apply_forward(batch_matrices, realize=args.realize)
             end_t = time.perf_counter()
             times.append(end_t - start_t)
 

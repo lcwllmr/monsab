@@ -466,11 +466,12 @@ pub fn build_sab_blocks(
             if let Some(rep) = current_rep {
                 let action_fwd = coset_reps.as_ref().and_then(|m| m.get(&rep).cloned());
                 let action_inv = coset_reps_inv.as_ref().and_then(|m| m.get(&rep).cloned());
-                let d_k = if let Some(ref a) = action_fwd {
-                    a.len()
-                } else {
-                    1
-                };
+                let d_k = bundle
+                    .representations
+                    .iter()
+                    .find(|r| r.id == rep)
+                    .map(|r| r.dim)
+                    .unwrap_or(1);
 
                 let fs_ind = bundle.fs_indicators.get(&rep).copied();
                 let v_mat = bundle.v_matrices.get(&rep).cloned();
@@ -613,11 +614,12 @@ pub fn build_sab_blocks(
     if let Some(rep) = current_rep {
         let action_fwd = coset_reps.as_ref().and_then(|m| m.get(&rep).cloned());
         let action_inv = coset_reps_inv.as_ref().and_then(|m| m.get(&rep).cloned());
-        let d_k = if let Some(ref a) = action_fwd {
-            a.len()
-        } else {
-            1
-        };
+        let d_k = bundle
+            .representations
+            .iter()
+            .find(|r| r.id == rep)
+            .map(|r| r.dim)
+            .unwrap_or(1);
         let fs_ind = bundle.fs_indicators.get(&rep).copied();
         let v_mat = bundle.v_matrices.get(&rep).cloned();
 

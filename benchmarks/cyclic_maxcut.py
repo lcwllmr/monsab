@@ -92,7 +92,9 @@ def main():
         # Scaled to exactly match explicit orbit sum
         blocks_by_rep = [
             [orbits_2t_list[i][1] * b for i, b in enumerate(block_mats)]
-            for block_mats in transform(rep_matrices, reynolds=True, realize=True)
+            for block_mats in transform.apply_forward(
+                rep_matrices, reynolds=True, realize=True
+            )
         ]
 
         return blocks_by_rep

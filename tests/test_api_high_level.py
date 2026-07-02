@@ -50,10 +50,10 @@ def test_build_sab_with_sequences_and_mappings():
 
     N = space.total_monomials()
     mat = scipy.sparse.eye(N, format="csr")
-    blocks1 = t1([mat])
-    blocks2 = t2([mat])
-    blocks3 = t3([mat])
-    blocks4 = t4([mat])
+    blocks1 = t1.apply_forward([mat])
+    blocks2 = t2.apply_forward([mat])
+    blocks3 = t3.apply_forward([mat])
+    blocks4 = t4.apply_forward([mat])
 
     assert len(blocks1) == len(blocks2) == len(blocks3) == len(blocks4)
     assert len(blocks1) > 0
