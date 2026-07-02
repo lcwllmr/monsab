@@ -12,13 +12,15 @@ def cyclic(order: int) -> PcGroup:
         raise ValueError("Order must be a positive integer.")
     if order == 1:
         return trivial()
-    return PcGroup(
+    grp = PcGroup(
         number_of_generators=1,
         orders=[order],
         conjugation_exponents={},
         power_tails={0: []},
         conjugation_tails={},
     )
+    assert grp.test_consistency()
+    return grp
 
 
 def abelian(*orders: int) -> PcGroup:

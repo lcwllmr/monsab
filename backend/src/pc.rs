@@ -84,7 +84,6 @@ pub struct PcGroup {
     pub conjugation_exponents: HashMap<(usize, usize), usize>,
     pub power_tails: HashMap<usize, Vec<(usize, usize)>>,
     pub conjugation_tails: HashMap<(usize, usize), Vec<(usize, usize)>>,
-    pub generators: Vec<Permutation>,
 }
 
 impl PcGroup {
@@ -154,35 +153,21 @@ impl PcGroup {
 #[pymethods]
 impl PcGroup {
     #[new]
-    #[pyo3(signature = (number_of_generators, orders, conjugation_exponents, power_tails, conjugation_tails, generators=vec![]))]
+    #[pyo3(signature = (number_of_generators, orders, conjugation_exponents, power_tails, conjugation_tails))]
     pub fn new(
         number_of_generators: usize,
         orders: Vec<usize>,
         conjugation_exponents: HashMap<(usize, usize), usize>,
         power_tails: HashMap<usize, Vec<(usize, usize)>>,
         conjugation_tails: HashMap<(usize, usize), Vec<(usize, usize)>>,
-        generators: Vec<Bound<'_, PyAny>>,
-    ) -> PyResult<Self> {
-        let mut perms = Vec::with_capacity(generators.len());
-        for gen in generators {
-            if let Ok(p) = gen.extract::<Permutation>() {
-                perms.push(p);
-            } else if let Ok(data) = gen.extract::<Vec<usize>>() {
-                perms.push(Permutation::new(data));
-            } else {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "generators must be Permutation instances or sequences of integers",
-                ));
-            }
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             number_of_generators,
             orders,
             conjugation_exponents,
             power_tails,
             conjugation_tails,
-            generators: perms,
-        })
+        }
     }
 
     #[getter]
@@ -210,7 +195,7 @@ impl PcGroup {
     }
 
     #[pyo3(signature = (generators))]
-    pub fn verify(&self, generators: Vec<Bound<'_, PyAny>>) -> PyResult<bool> {
+    pub fn test_generators(&self, generators: Vec<Bound<'_, PyAny>>) -> PyResult<bool> {
         let mut perms = Vec::with_capacity(generators.len());
         for gen in generators {
             if let Ok(p) = gen.extract::<Permutation>() {
@@ -224,30 +209,6 @@ impl PcGroup {
             }
         }
         Ok(self.verify_rust(&perms))
-    }
-
-    #[pyo3(signature = (generators))]
-    pub fn test_generators(&self, generators: Vec<Bound<'_, PyAny>>) -> PyResult<bool> {
-        self.verify(generators)
-    }
-
-    #[pyo3(signature = (generators))]
-    pub fn with_generators(&self, generators: Vec<Bound<'_, PyAny>>) -> PyResult<Self> {
-        let mut perms = Vec::with_capacity(generators.len());
-        for gen in generators {
-            if let Ok(p) = gen.extract::<Permutation>() {
-                perms.push(p);
-            } else if let Ok(data) = gen.extract::<Vec<usize>>() {
-                perms.push(Permutation::new(data));
-            } else {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "generators must be Permutation instances or sequences of integers",
-                ));
-            }
-        }
-        let mut clone = self.clone();
-        clone.generators = perms;
-        Ok(clone)
     }
 
     pub fn test_consistency(&self) -> bool {
@@ -292,14 +253,17 @@ impl PcGroup {
                 return false;
             }
         }
-        if !self.generators.is_empty() && !self.verify_rust(&self.generators) {
-            return false;
-        }
+
         true
     }
 
-    pub fn test_supersolvable(&self) -> bool {
-        if !self.test_consistency() || !self.is_normal_series() {
+    #[getter]
+    pub fn is_abelian(&self) -> bool {
+        self.test_abelian()
+    }
+
+    pub fn test_abelian(&self) -> bool {
+        if !self.test_consistency() {
             return false;
         }
         for j in 0..self.number_of_generators {
@@ -311,6 +275,77 @@ impl PcGroup {
                     .unwrap_or(1);
                 if c % self.orders[j] != 1 % self.orders[j] {
                     return false;
+                }
+                if let Some(tail) = self.conjugation_tails.get(&(j, k)) {
+                    if !tail.is_empty() {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    #[getter]
+    pub fn is_nilpotent(&self) -> bool {
+        self.test_nilpotent()
+    }
+
+    pub fn test_nilpotent(&self) -> bool {
+        if !self.test_consistency() || !self.is_normal_series() {
+            return false;
+        }
+        for j in 0..self.number_of_generators {
+            for k in (j + 1)..self.number_of_generators {
+                let c = self
+                    .conjugation_exponents
+                    .get(&(j, k))
+                    .cloned()
+                    .unwrap_or(1);
+                let tail = self
+                    .conjugation_tails
+                    .get(&(j, k))
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+
+                if self.orders[j] != self.orders[k] {
+                    if c % self.orders[j] != 1 % self.orders[j] || !tail.is_empty() {
+                        return false;
+                    }
+                } else {
+                    if c % self.orders[j] != 1 % self.orders[j] {
+                        return false;
+                    }
+                    for &(idx, _) in tail {
+                        if self.orders[idx] != self.orders[j] {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    #[getter]
+    pub fn is_supersolvable(&self) -> bool {
+        self.test_supersolvable()
+    }
+
+    pub fn test_supersolvable(&self) -> bool {
+        if !self.test_consistency() || !self.is_normal_series() {
+            return false;
+        }
+        for j in 0..self.number_of_generators {
+            for k in (j + 1)..self.number_of_generators {
+                if self.orders[j] != self.orders[k] {
+                    if let Some(tail) = self.conjugation_tails.get(&(j, k)) {
+                        for &(idx, _) in tail {
+                            if idx != k && self.orders[idx] == self.orders[k] {
+                                return false;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -409,5 +444,118 @@ mod tests {
         assert!(!is_prime(4));
         assert!(is_prime(5));
         assert!(is_prime(13));
+    }
+
+    #[test]
+    fn test_pc_group_s3() {
+        let mut conjugation_exponents = HashMap::new();
+        conjugation_exponents.insert((0, 1), 1);
+        let mut conjugation_tails = HashMap::new();
+        conjugation_tails.insert((0, 1), vec![(1, 2)]);
+        let s3 = PcGroup {
+            number_of_generators: 2,
+            orders: vec![2, 3],
+            conjugation_exponents,
+            power_tails: HashMap::new(),
+            conjugation_tails,
+        };
+        assert!(s3.test_consistency());
+        assert!(!s3.is_abelian());
+        assert!(!s3.is_nilpotent());
+        assert!(s3.test_supersolvable());
+    }
+
+    #[test]
+    fn test_pc_group_a4() {
+        let mut conjugation_exponents = HashMap::new();
+        conjugation_exponents.insert((0, 1), 2);
+        conjugation_exponents.insert((0, 2), 2);
+        conjugation_exponents.insert((1, 2), 1);
+        let mut conjugation_tails = HashMap::new();
+        conjugation_tails.insert((0, 1), vec![(2, 1)]);
+        conjugation_tails.insert((0, 2), vec![(1, 1), (2, 1)]);
+        let a4 = PcGroup {
+            number_of_generators: 3,
+            orders: vec![3, 2, 2],
+            conjugation_exponents,
+            power_tails: HashMap::new(),
+            conjugation_tails,
+        };
+        assert!(a4.test_consistency());
+        assert!(!a4.is_abelian());
+        assert!(!a4.is_nilpotent());
+        assert!(!a4.test_supersolvable());
+    }
+
+    #[test]
+    fn test_pc_group_c6() {
+        let mut conjugation_exponents = HashMap::new();
+        conjugation_exponents.insert((0, 1), 1);
+        let c6 = PcGroup {
+            number_of_generators: 2,
+            orders: vec![2, 3],
+            conjugation_exponents,
+            power_tails: HashMap::new(),
+            conjugation_tails: HashMap::new(),
+        };
+        assert!(c6.test_consistency());
+        assert!(c6.is_abelian());
+        assert!(c6.is_nilpotent());
+        assert!(c6.test_supersolvable());
+    }
+
+    #[test]
+    fn test_pc_group_d16() {
+        // Dihedral group with 16 elements (order 16, D8), a 2-group (nilpotent but not abelian)
+        let mut conjugation_exponents = HashMap::new();
+        let mut conjugation_tails = HashMap::new();
+        let mut power_tails = HashMap::new();
+        for j in 0..3 {
+            for i in (j + 1)..3 {
+                conjugation_exponents.insert((j, i), 1);
+            }
+        }
+        for j in 0..3 {
+            conjugation_exponents.insert((j, 3), 1);
+            conjugation_tails.insert((j, 3), ((j + 1)..3).map(|i| (i, 1)).collect());
+        }
+        for i in 0..3 {
+            power_tails.insert(i, if i < 2 { vec![(i + 1, 1)] } else { vec![] });
+        }
+        power_tails.insert(3, vec![]);
+        let d16 = PcGroup {
+            number_of_generators: 4,
+            orders: vec![2, 2, 2, 2],
+            conjugation_exponents,
+            power_tails,
+            conjugation_tails,
+        };
+        assert!(d16.test_consistency());
+        assert!(!d16.is_abelian());
+        assert!(d16.is_nilpotent());
+        assert!(d16.is_supersolvable());
+    }
+
+    #[test]
+    fn test_pc_group_non_consistent() {
+        let bad_prime = PcGroup {
+            number_of_generators: 1,
+            orders: vec![4],
+            conjugation_exponents: HashMap::new(),
+            power_tails: HashMap::new(),
+            conjugation_tails: HashMap::new(),
+        };
+        assert!(!bad_prime.test_consistency());
+
+        let mut conjugation_exponents = HashMap::new();
+        conjugation_exponents.insert((0, 1), 2);
+        let bad_exponent = PcGroup {
+            number_of_generators: 2,
+            orders: vec![2, 3],
+            conjugation_exponents,
+            power_tails: HashMap::new(),
+            conjugation_tails: HashMap::new(),
+        };
+        assert!(!bad_exponent.test_consistency());
     }
 }

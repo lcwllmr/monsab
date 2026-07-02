@@ -8,13 +8,18 @@ def test_cyclic():
     gen0 = Permutation(tuple((i + 1) % n for i in range(n)))
     assert grp.test_generators([gen0])
     assert grp.test_consistency()
+    assert grp.is_abelian
+    assert grp.is_nilpotent
     assert grp.test_supersolvable()
 
 
 def test_abelian():
     grp = abelian(2, 3)
     assert grp.test_consistency()
+    assert grp.is_abelian
+    assert grp.is_nilpotent
     assert grp.test_supersolvable()
+
     assert len(grp.orders) == 2
 
 

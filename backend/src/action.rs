@@ -88,17 +88,22 @@ impl<const D: usize> Monomial<D> for SquarefreeMonomial<D> {
 
 pub struct InternalOrbitLifter<M: Monomial<D>, const D: usize> {
     group: PcGroup,
+    generators: Vec<Permutation>,
     cache: Vec<FxHashMap<M, M>>,
 }
 
 impl<M: Monomial<D>, const D: usize> InternalOrbitLifter<M, D> {
-    pub fn new(group: PcGroup) -> Self {
+    pub fn new(group: PcGroup, generators: Vec<Permutation>) -> Self {
         let levels = group.orders.len() + 1;
         let mut cache = Vec::with_capacity(levels);
         for _ in 0..levels {
             cache.push(FxHashMap::default());
         }
-        Self { group, cache }
+        Self {
+            group,
+            generators,
+            cache,
+        }
     }
 
     pub fn clear_cache(&mut self) {
@@ -108,11 +113,12 @@ impl<M: Monomial<D>, const D: usize> InternalOrbitLifter<M, D> {
     }
 
     pub fn canonicalize(&mut self, m: &M, level: usize) -> M {
-        Self::canonicalize_internal(&self.group, &mut self.cache, m, level)
+        Self::canonicalize_internal(&self.group, &self.generators, &mut self.cache, m, level)
     }
 
     fn canonicalize_internal(
         group: &PcGroup,
+        generators: &[Permutation],
         cache: &mut [FxHashMap<M, M>],
         m: &M,
         level: usize,
@@ -128,14 +134,15 @@ impl<M: Monomial<D>, const D: usize> InternalOrbitLifter<M, D> {
         }
 
         let p = group.orders[level - 1];
-        let gen = &group.generators[level - 1];
+        let gen = &generators[level - 1];
 
-        let mut best = Self::canonicalize_internal(group, cache, m, level - 1);
+        let mut best = Self::canonicalize_internal(group, generators, cache, m, level - 1);
         let mut current = m.clone();
 
         for _ in 1..p {
             current = current.permute(gen);
-            let candidate = Self::canonicalize_internal(group, cache, &current, level - 1);
+            let candidate =
+                Self::canonicalize_internal(group, generators, cache, &current, level - 1);
             if candidate < best {
                 best = candidate;
             }
@@ -165,16 +172,33 @@ pub struct OrbitLifter {
 #[pymethods]
 impl OrbitLifter {
     #[new]
-    pub fn new(group: PcGroup, d: usize, is_squarefree: bool) -> PyResult<Self> {
+    pub fn new(
+        group: PcGroup,
+        generators: Vec<Bound<'_, PyAny>>,
+        d: usize,
+        is_squarefree: bool,
+    ) -> PyResult<Self> {
+        let mut perms = Vec::with_capacity(generators.len());
+        for gen in generators {
+            if let Ok(p) = gen.extract::<Permutation>() {
+                perms.push(p);
+            } else if let Ok(data) = gen.extract::<Vec<usize>>() {
+                perms.push(Permutation::new(data));
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "generators must be Permutation instances or sequences of integers",
+                ));
+            }
+        }
         let state = match (d, is_squarefree) {
-            (1, false) => LifterState::Std1(InternalOrbitLifter::new(group)),
-            (2, false) => LifterState::Std2(InternalOrbitLifter::new(group)),
-            (3, false) => LifterState::Std3(InternalOrbitLifter::new(group)),
-            (4, false) => LifterState::Std4(InternalOrbitLifter::new(group)),
-            (1, true) => LifterState::Sq1(InternalOrbitLifter::new(group)),
-            (2, true) => LifterState::Sq2(InternalOrbitLifter::new(group)),
-            (3, true) => LifterState::Sq3(InternalOrbitLifter::new(group)),
-            (4, true) => LifterState::Sq4(InternalOrbitLifter::new(group)),
+            (1, false) => LifterState::Std1(InternalOrbitLifter::new(group, perms)),
+            (2, false) => LifterState::Std2(InternalOrbitLifter::new(group, perms)),
+            (3, false) => LifterState::Std3(InternalOrbitLifter::new(group, perms)),
+            (4, false) => LifterState::Std4(InternalOrbitLifter::new(group, perms)),
+            (1, true) => LifterState::Sq1(InternalOrbitLifter::new(group, perms)),
+            (2, true) => LifterState::Sq2(InternalOrbitLifter::new(group, perms)),
+            (3, true) => LifterState::Sq3(InternalOrbitLifter::new(group, perms)),
+            (4, true) => LifterState::Sq4(InternalOrbitLifter::new(group, perms)),
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "Unsupported degree D > 4 or D = 0",

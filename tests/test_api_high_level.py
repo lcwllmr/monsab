@@ -24,7 +24,7 @@ def test_top_level_exports():
 
 
 def test_build_sab_with_sequences_and_mappings():
-    n = 5
+    n = 3  # AGL(1,3) ≅ S_3; p=3 is a safe prime (p-1=2 is prime)
     space = MonomialSpace(n=n, d=2)
     group = zoo.affine_group_1d(n)
 

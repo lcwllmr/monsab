@@ -29,7 +29,7 @@ def test_sab_transform_s3():
         conjugation_tails={},
     )
 
-    assert presentation.verify((g1, g2))
+    assert presentation.test_generators((g1, g2))
 
     # Run Baum-Clausen
     e = 6  # max order of elements is 3, but 6 is a multiple

@@ -312,18 +312,23 @@ class MonomialSpace:
         return orbit_reps
 
     def get_orbit_reps_and_sizes(
-        self, group: PcGroup, d: int | None = None
+        self, group: PcGroup, generators: list[Permutation], d: int | None = None
     ) -> dict[int, int]:
         """
         Uses the fast OrbitLifter to evaluate the canonical orbit representative
         for every monomial up to degree d and returns a dictionary mapping rep_id to orbit_size.
+
+        Args:
+            group: The abstract polycyclic group presentation.
+            generators: A list of concrete `Permutation` generators matching the group presentation.
+            d: The degree bound (defaults to the space's degree).
         """
         d = self._get_d(d)
         if d > 4:
             raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
 
         self._ensure_d(d)
-        lifters = {k: OrbitLifter(group, k, False) for k in range(1, d + 1)}
+        lifters = {k: OrbitLifter(group, generators, k, False) for k in range(1, d + 1)}
         rep_counts = {}
         for m in range(self.total_monomials(d)):
             tup = self.unrank_tuple(m)
@@ -795,18 +800,23 @@ class SquarefreeMonomialSpace:
         return orbit_reps
 
     def get_orbit_reps_and_sizes(
-        self, group: PcGroup, d: int | None = None
+        self, group: PcGroup, generators: list[Permutation], d: int | None = None
     ) -> dict[int, int]:
         """
         Uses the fast OrbitLifter to evaluate the canonical orbit representative
         for every squarefree monomial and returns a dictionary mapping rep_id to orbit_size.
+
+        Args:
+            group: The abstract polycyclic group presentation.
+            generators: A list of concrete `Permutation` generators matching the group presentation.
+            d: The degree bound (defaults to the space's degree).
         """
         d = self._get_d(d)
         if d > 4:
             raise NotImplementedError("Fast orbit lifter not implemented for D > 4")
 
         self._ensure_d(d)
-        lifters = {k: OrbitLifter(group, k, True) for k in range(1, d + 1)}
+        lifters = {k: OrbitLifter(group, generators, k, True) for k in range(1, d + 1)}
         rep_counts = {}
         for m in range(self.total_monomials(d)):
             tup = self.unrank_tuple(m)

@@ -50,7 +50,7 @@ def main():
 
     # 1. Group
     perms = [Permutation(tuple((i + 1) % n for i in range(n)))]
-    grp = zoo.cyclic(n).with_generators(perms)
+    grp = zoo.cyclic(n)
     concrete_generators = {1: perms[0]}
 
     # 2. Spaces
@@ -62,7 +62,7 @@ def main():
 
     orbits_2t = timed_step(
         "Build orbits for 2t",
-        lambda: space.get_orbit_reps_and_sizes(grp, 2 * t),
+        lambda: space.get_orbit_reps_and_sizes(grp, perms, 2 * t),
     )
 
     # 3. SAB Transform

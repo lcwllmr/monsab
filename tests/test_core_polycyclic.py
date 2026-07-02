@@ -12,6 +12,9 @@ def test_polycyclic_presentation():
     )
     assert p.test_consistency()
     assert p.is_normal_series
+    assert p.is_abelian
+    assert p.is_nilpotent
+    assert p.is_supersolvable
 
     non_prime = PcGroup(
         number_of_generators=1,
@@ -33,12 +36,12 @@ def test_polycyclic_edge_cases():
     desc = PcGroup(1, (2,), {}, {0: ((0, 1),)}, {})
     assert desc.order == 2
 
-    assert not desc.verify(())
-    assert desc.verify((Permutation((0,)),))
-    assert not desc.verify((Permutation((1, 0)),))
+    assert not desc.test_generators(())
+    assert desc.test_generators((Permutation((0,)),))
+    assert not desc.test_generators((Permutation((1, 0)),))
 
     bad_conj = PcGroup(2, (2, 2), {(0, 1): 0}, {}, {(0, 1): ()})
-    assert not bad_conj.verify((Permutation((1, 0)), Permutation((1, 0))))
+    assert not bad_conj.test_generators((Permutation((1, 0)), Permutation((1, 0))))
 
     bad_normal = PcGroup(2, (2, 2), {}, {}, {(1, 0): ((0, 1),)})
     assert not bad_normal.is_normal_series

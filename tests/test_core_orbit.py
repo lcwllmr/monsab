@@ -9,10 +9,10 @@ def test_orbit_lifter_standard():
         conjugation_exponents={},
         power_tails={},
         conjugation_tails={},
-        generators=[[1, 2, 0]],
     )
+    generators = [[1, 2, 0]]
 
-    lifter = OrbitLifter(group, 2, False)  # D=2, standard monomial
+    lifter = OrbitLifter(group, generators, 2, False)  # D=2, standard monomial
 
     # Monomials represented as indices
     m1 = [0, 1]
@@ -35,13 +35,13 @@ def test_orbit_lifter_squarefree():
         conjugation_exponents={},
         power_tails={},
         conjugation_tails={},
-        generators=[
-            [1, 0, 3, 2],  # (0 1)(2 3)
-            [2, 3, 0, 1],  # (0 2)(1 3)
-        ],
     )
+    generators = [
+        [1, 0, 3, 2],  # (0 1)(2 3)
+        [2, 3, 0, 1],  # (0 2)(1 3)
+    ]
 
-    lifter = OrbitLifter(group, 3, True)  # D=3, squarefree
+    lifter = OrbitLifter(group, generators, 3, True)  # D=3, squarefree
 
     m1 = [0, 1, 2]
     m2 = [0, 1, 3]  # Under first gen: [1, 0, 2] which is [0, 1, 2]

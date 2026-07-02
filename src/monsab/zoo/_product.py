@@ -36,10 +36,12 @@ def direct_product(*factors: PcGroup) -> PcGroup:
 
         offset += factor.number_of_generators
 
-    return PcGroup(
+    grp = PcGroup(
         combined_number_of_generators,
         orders=combined_orders,
         conjugation_exponents=combined_conjugation_exponents,
         power_tails=combined_power_tails,
         conjugation_tails=combined_conjugation_tails,
     )
+    assert grp.test_consistency()
+    return grp
